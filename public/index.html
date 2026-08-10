@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Full &amp; Final Settlement — Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0a1f3a;
+  --ink-soft:#4c6480;
+  --navy:#003b73;
+  --navy-2:#0091ea;
+  --paper:#ffffff;
+  --paper-2:#eaf3fc;
+  --card:#ffffff;
+  --gold:#0072ce;
+  --gold-bright:#4fc3f7;
+  --line:#cfe0f0;
+  --green:#0f9d58;
+  --green-bg:#e1f5ea;
+  --red:#d64550;
+  --red-bg:#fbe6e8;
+  --amber-bg:#e8f2fc;
+  font-family:"IBM Plex Sans", sans-serif;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  background:var(--paper);
+  background-image:
+    radial-gradient(circle at 100% 0%, rgba(0,145,234,0.09), transparent 45%),
+    radial-gradient(circle at 0% 100%, rgba(0,59,115,0.07), transparent 45%),
+    radial-gradient(circle at 80% 80%, rgba(79,195,247,0.10), transparent 50%),
+    repeating-linear-gradient(0deg, rgba(10,31,58,0.025) 0px, rgba(10,31,58,0.025) 1px, transparent 1px, transparent 3px);
+  color:var(--ink);
+  min-height:100vh;
+}
+::selection{background:var(--gold-bright);color:var(--navy);}
+
+.masthead{
+  background:linear-gradient(115deg, var(--navy) 0%, #005fa3 45%, var(--navy-2) 100%);
+  color:var(--paper);
+  padding:26px 40px 22px;
+  border-bottom:4px solid var(--gold-bright);
+  position:relative;
+  overflow:hidden;
+}
+.masthead-row{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;position:relative;z-index:1;}
+.masthead h1{
+  font-family:"Fraunces", serif;
+  font-weight:500;
+  font-size:32px;
+  margin:0 0 4px;
+  letter-spacing:0.2px;
+}
+.masthead .kicker{
+  font-family:"IBM Plex Mono", monospace;
+  font-size:11px;
+  letter-spacing:2.5px;
+  text-transform:uppercase;
+  color:var(--gold-bright);
+  margin-bottom:10px;
+}
+.meta-strip{display:flex;gap:26px;font-family:"IBM Plex Mono", monospace;font-size:11.5px;color:#cfe8ff;flex-wrap:wrap;}
+.meta-strip b{color:var(--paper);font-weight:500;}
+.status-pill{
+  font-family:"IBM Plex Mono", monospace;font-size:11px;padding:5px 12px;
+  border:1px solid var(--gold-bright);border-radius:20px;color:var(--gold-bright);white-space:nowrap;
+}
+
+.tabbar{display:flex;gap:10px;align-items:center;max-width:1280px;margin:0 auto;padding:14px 42px 0;}
+.tab{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.5px;
+  padding:9px 16px;border-radius:20px;border:1px solid var(--line);
+  background:#fff;color:var(--ink-soft);cursor:pointer;
+}
+.tab.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+
+.content{max-width:1280px;margin:0 auto;padding:20px 42px 60px;}
+
+.detail-layout{display:grid;grid-template-columns:250px 1fr;gap:0;}
+.detail-stepper{padding:6px 18px 40px 0;border-right:1px solid var(--line);}
+.detail-stepper-title{font-family:"IBM Plex Mono", monospace;font-size:10.5px;letter-spacing:2px;text-transform:uppercase;color:var(--ink-soft);margin:0 0 16px 2px;}
+.detail-step{display:flex;gap:14px;padding:12px 10px;border-radius:10px;cursor:pointer;margin-bottom:2px;transition:background .15s ease;}
+.detail-step:hover{background:rgba(0,114,206,0.06);}
+.detail-step.active{background:#fff;box-shadow:inset 0 0 0 1px var(--line);}
+.detail-step-num{
+  font-family:"IBM Plex Mono", monospace;font-size:12px;width:26px;height:26px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;border:1px solid var(--ink-soft);color:var(--ink-soft);
+  flex-shrink:0;background:#fff;
+}
+.detail-step.active .detail-step-num{border-color:var(--gold);color:var(--navy);background:var(--gold-bright);}
+.detail-step.visited .detail-step-num{border-color:var(--green);color:#fff;background:var(--green);}
+.detail-step-label{font-size:13.5px;line-height:1.35;padding-top:3px;}
+.detail-step-label small{display:block;font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--ink-soft);margin-top:2px;}
+.detail-step.active .detail-step-label{font-weight:600;}
+.detail-content{padding-left:32px;}
+.panel{
+  background:var(--card);border:1px solid var(--line);border-radius:4px;
+  box-shadow:0 1px 0 rgba(19,32,51,0.04), 0 10px 30px -18px rgba(19,32,51,0.25);
+  padding:32px 36px;margin-bottom:22px;animation:rise .35s ease both;
+}
+@keyframes rise{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+.panel-head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:22px;}
+.panel-head h2{font-family:"Fraunces",serif;font-weight:500;font-size:23px;margin:0;}
+.panel-head .frtag{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--gold);letter-spacing:1px;}
+.panel-sub{font-size:13px;color:var(--ink-soft);margin:-14px 0 22px;line-height:1.5;}
+
+.field-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 24px;}
+.field{display:flex;flex-direction:column;gap:6px;}
+.field.full{grid-column:1/-1;}
+label{font-size:12px;font-weight:600;color:var(--ink);}
+label .fr{font-family:"IBM Plex Mono",monospace;font-weight:400;color:var(--ink-soft);font-size:10.5px;margin-left:4px;}
+input[type=text], input[type=number], input[type=date], select{
+  font-family:"IBM Plex Sans",sans-serif;font-size:14px;padding:9px 11px;
+  border:1px solid #bfd9f2;border-radius:5px;background:#f7fbff;color:var(--ink);
+}
+input:focus, select:focus{outline:2px solid var(--gold-bright);outline-offset:1px;border-color:var(--gold);}
+.hint{font-size:11.5px;color:var(--ink-soft);}
+
+.checklist{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px;}
+.checklist li{display:flex;align-items:center;gap:10px;font-size:14px;padding:9px 12px;border:1px solid var(--line);border-radius:6px;background:#f7fbff;}
+.checklist input{width:16px;height:16px;accent-color:var(--gold);}
+
+.toggle-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 14px;border:1px solid var(--line);border-radius:6px;background:#f7fbff;margin-bottom:10px;}
+.toggle-row .t-label{font-size:13.5px;}
+.toggle-row .t-label small{display:block;color:var(--ink-soft);font-size:11.5px;margin-top:2px;}
+.switch{position:relative;width:42px;height:24px;flex-shrink:0;}
+.switch input{opacity:0;width:0;height:0;}
+.slider{position:absolute;inset:0;background:#cfe0f0;border-radius:20px;cursor:pointer;transition:.2s;}
+.slider::before{content:"";position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;}
+.switch input:checked + .slider{background:var(--green);}
+.switch input:checked + .slider::before{transform:translateX(18px);}
+
+.badge{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:11px;padding:4px 10px;border-radius:20px;}
+.badge.ok{background:var(--green-bg);color:var(--green);}
+.badge.pending{background:var(--red-bg);color:var(--red);}
+.badge.flag{background:var(--amber-bg);color:var(--gold);}
+.badge.status-active{background:var(--amber-bg);color:var(--gold);}
+.badge.status-closed{background:var(--green-bg);color:var(--green);}
+.badge.status-pending{background:var(--red-bg);color:var(--red);}
+.badge.sla-within{background:var(--green-bg);color:var(--green);}
+.badge.sla-breached{background:var(--red-bg);color:var(--red);}
+.badge.sla-waiting{background:var(--amber-bg);color:var(--gold);}
+.badge.sla-upcoming{background:var(--paper-2);color:var(--ink-soft);}
+.badge.sla-na{background:var(--paper-2);color:var(--ink-soft);}
+
+.callout{border-left:3px solid var(--gold);background:var(--amber-bg);padding:12px 16px;border-radius:0 6px 6px 0;font-size:13px;line-height:1.55;margin:16px 0;}
+.callout b{color:#0a3d73;}
+.callout.danger{border-color:var(--red);background:var(--red-bg);}
+.callout.success{border-color:var(--green);background:var(--green-bg);}
+
+.no-dues-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+.dues-card{border:1px solid var(--line);border-radius:8px;padding:16px;background:#f7fbff;}
+.dues-card h4{margin:0 0 10px;font-size:13.5px;font-family:"IBM Plex Mono",monospace;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-soft);}
+
+.ledger{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px;}
+.ledger th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-soft);border-bottom:1px solid var(--ink);padding:6px 8px;}
+.ledger td{padding:9px 8px;border-bottom:1px dashed var(--line);}
+.ledger td.num, .ledger th.num{text-align:right;font-family:"IBM Plex Mono",monospace;}
+.ledger tr.subtotal td{font-weight:600;border-top:1px solid var(--ink);border-bottom:none;}
+.ledger tr.deduct td.num{color:var(--red);}
+.ledger tr.credit td.num{color:var(--green);}
+.ledger tr.net td{font-family:"Fraunces",serif;font-size:19px;padding-top:14px;}
+.ledger tr.net.pay td.num{color:var(--green);}
+.ledger tr.net.recover td.num{color:var(--red);}
+
+.queue-table th, .queue-table td{padding:8px 8px;font-size:13.5px;}
+
+.actions{display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:12px;flex-wrap:wrap;}
+.btn{
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;letter-spacing:.5px;padding:11px 22px;
+  border-radius:5px;border:1px solid var(--navy);background:var(--navy);color:var(--paper);
+  cursor:pointer;transition:transform .12s ease, box-shadow .12s ease;
+}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 14px -8px rgba(15,27,45,0.6);}
+.btn.secondary{background:transparent;color:var(--navy);}
+.btn.gold{background:var(--gold);border-color:var(--gold);color:#fff;}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none;}
+
+.gate{font-size:12.5px;color:var(--ink-soft);font-family:"IBM Plex Mono",monospace;}
+.gate.blocked{color:var(--red);}
+.gate.clear{color:var(--green);}
+
+.stamp{
+  display:inline-block;border:2px solid var(--green);color:var(--green);
+  font-family:"IBM Plex Mono",monospace;font-size:12px;padding:6px 14px;border-radius:4px;
+  transform:rotate(-3deg);letter-spacing:1px;
+}
+
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:6px;}
+.kpi-card{
+  background:var(--card);border:1px solid var(--line);border-left:5px solid var(--navy);
+  border-radius:8px;padding:20px 22px;cursor:pointer;transition:transform .15s ease, box-shadow .15s ease;
+}
+.kpi-card:hover{transform:translateY(-3px);box-shadow:0 10px 24px -14px rgba(10,31,58,0.35);}
+.kpi-card .kpi-value{font-family:"Fraunces",serif;font-size:34px;font-weight:600;color:var(--ink);line-height:1;}
+.kpi-card .kpi-label{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.5px;color:var(--ink-soft);margin-top:8px;text-transform:uppercase;}
+.kpi-card.tone-navy{border-left-color:var(--navy);}
+.kpi-card.tone-blue{border-left-color:var(--navy-2);}
+.kpi-card.tone-amber{border-left-color:var(--gold-bright);}
+.kpi-card.tone-green{border-left-color:var(--green);}
+.kpi-card.tone-red{border-left-color:var(--red);}
+
+.emp-picker{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  background:var(--paper-2);border:1px solid var(--line);border-radius:8px;padding:14px 18px;margin-bottom:18px;
+}
+.emp-picker label{white-space:nowrap;}
+.emp-picker select{min-width:260px;}
+
+.emp-header{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin-bottom:18px;}
+.emp-header h2{font-family:"Fraunces",serif;font-weight:500;font-size:26px;margin:0 0 4px;}
+.emp-header .sub{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-soft);}
+
+.gist-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px;}
+.gist-card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px 16px;}
+.gist-card .g-label{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-soft);}
+.gist-card .g-value{font-family:"Fraunces",serif;font-size:20px;margin-top:4px;color:var(--ink);}
+
+.section{scroll-margin-top:60px;}
+.section-title{font-family:"Fraunces",serif;font-size:18px;font-weight:500;display:flex;align-items:center;gap:10px;margin:0 0 16px;}
+.section-title .num{
+  width:26px;height:26px;border-radius:50%;background:var(--navy);color:#fff;
+  font-family:"IBM Plex Mono",monospace;font-size:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+hr.divider{border:none;border-top:1px dashed var(--line);margin:28px 0;}
+
+footer.foot{max-width:1280px;margin:0 auto;padding:18px 42px 40px;font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--ink-soft);border-top:1px solid var(--line);}
+.sync-indicator{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--gold-bright);}
+
+@media print{
+  .tabbar, .btn, .foot, .detail-stepper, .emp-picker{display:none !important;}
+  .panel{box-shadow:none;border:1px solid #999;}
+}
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <div class="masthead-row">
+    <div>
+      <div class="kicker">Full &amp; Final Settlement · Live App</div>
+      <h1>Full &amp; Final Settlement</h1>
+      <div class="meta-strip">
+        <span>Owner: <b>HR Operations</b></span>
+        <span>PRD: <b>v1.0</b></span>
+        <span id="sync-status" class="sync-indicator">Loading…</span>
+      </div>
+    </div>
+    <div class="status-pill">DRAFT — pending sign-off on open items §10</div>
+  </div>
+</div>
+
+<div class="tabbar" id="tabbar"></div>
+<div class="content" id="app"></div>
+
+<footer class="foot">FnF Settlement App — data source: live PMS (Kites API), synced via REST API (lib/store.js). Section 10 open items (TDS methodology, Incentive/PLI treatment) remain flagged pending stakeholder sign-off.</footer>
+
+<script>
+/* ---------------- API layer ---------------- */
+async function apiList(){ const r = await fetch('/api/records?asOf=' + asOfDate); return r.json(); }
+async function apiPatch(id, patch){ const r = await fetch('/api/records/' + id, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch)}); return r.json(); }
+async function apiCreate(seed){ const r = await fetch('/api/records', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(seed||{})}); return r.json(); }
+async function apiDelete(id){ await fetch('/api/records/' + id, {method:'DELETE'}); }
+
+/* ---------------- PMS (live employee data) ---------------- */
+let pmsSummary = null; // { resignedCount, servingNoticeCount, employees } | { error: true }
+async function loadPmsSummary(){
+  try{
+    const r = await fetch('/api/pms/notice-period-summary?asOf=' + asOfDate);
+    if(!r.ok) throw new Error('request failed');
+    pmsSummary = await r.json();
+  }catch(e){
+    console.error('PMS summary load failed', e);
+    pmsSummary = { error:true };
+  }
+  render();
+}
+
+let syncTimer = null;
+let lastSynced = {};
+function setSyncStatus(text){ const el = document.getElementById('sync-status'); if(el) el.textContent = text; }
+function scheduleSync(){
+  setSyncStatus('Saving…');
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    for(const rec of state.records){
+      const json = JSON.stringify(rec);
+      if(lastSynced[rec.id] === json) continue;
+      try { await apiPatch(rec.id, rec); lastSynced[rec.id] = json; }
+      catch(e){ console.error('sync failed for record', rec.id, e); }
+    }
+    setSyncStatus('Synced');
+  }, 500);
+}
+
+/* ---------------- local calc (mirrors lib/calc.js) ---------------- */
+function calc(rec){
+  const c = rec.comp, d = rec.dues;
+  const salary = c.workingDays > 0 ? (c.grossSalary / c.workingDays) * c.presentDays : 0;
+  const pf = c.workingDays > 0 ? (c.epf / c.workingDays) * c.presentDays : 0;
+  const gratuity = c.tenureYears > 5 ? (0.5 * c.grossSalary * 15 * c.tenureYears) / 26 : 0;
+  const noticePay = d.noticePay.applicable ? Number(d.noticePay.amount || 0) : 0;
+  const examDeduct = d.exam.required === "yes_required" ? Number(d.exam.amount || 0) : 0;
+  const wfhDeduct = Number(d.wfh.balance || 0) < 0 ? Math.abs(Number(d.wfh.balance)) : 0;
+  const loanAdv = Number(d.loanAdvance.amount || 0);
+  const taBill = Number(c.taBill || 0);
+  const nps = Number(c.nps || 0);
+  const vpf = Number(c.vpf || 0);
+  const tds = Number(c.tds || 0);
+  const pli = Number(c.pli || 0);
+  const earnings = salary + pf + gratuity + noticePay + pli + (taBill > 0 ? taBill : 0);
+  const deductions = examDeduct + wfhDeduct + loanAdv + tds + nps + vpf + (taBill < 0 ? Math.abs(taBill) : 0);
+  const net = earnings - deductions;
+  return { salary, pf, gratuity, noticePay, examDeduct, wfhDeduct, loanAdv, taBill, nps, vpf, tds, pli, earnings, deductions, net };
+}
+function recStatus(rec){
+  if(rec.closure.expLetter && rec.closure.slips) return 'closed';
+  if(rec.started) return 'active';
+  return 'pending';
+}
+function daysBetween(a,b){ return Math.round((new Date(b) - new Date(a)) / 86400000); }
+function shiftDate(dateStr, days){
+  if(!dateStr) return '—';
+  const d = new Date(dateStr);
+  d.setDate(d.getDate()+days);
+  return d.toISOString().slice(0,10);
+}
+function recSla(rec){
+  if(!rec.lwd) return {state:'na', label:'—'};
+  if(rec.emailSentDate){
+    const gap = daysBetween(rec.lwd, rec.emailSentDate);
+    return gap<=2 ? {state:'within', label:`Sent day ${gap}`} : {state:'breached', label:`Sent day ${gap} (late)`};
+  }
+  const elapsed = daysBetween(rec.lwd, asOfDate);
+  if(elapsed<0) return {state:'upcoming', label:`LWD in ${-elapsed}d`};
+  if(elapsed>2) return {state:'breached', label:`${elapsed}d overdue — not sent`};
+  return {state:'waiting', label:`Day ${elapsed} of 2 — not sent yet`};
+}
+function totals(){
+  const r = state.records;
+  return {
+    exits: r.length,
+    active: r.filter(x=>recStatus(x)==='active').length,
+    closed: r.filter(x=>recStatus(x)==='closed').length,
+    pending: r.filter(x=>recStatus(x)==='pending').length,
+    slaWithin: r.filter(x=>recSla(x).state==='within').length,
+    slaBreached: r.filter(x=>recSla(x).state==='breached').length,
+  };
+}
+function fmt(n){
+  const v = Math.round((n + Number.EPSILON) * 100)/100;
+  const neg = v < 0;
+  const abs = Math.abs(v).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
+  return (neg? "-₹" : "₹") + abs;
+}
+function field(labelHtml, inner){ return `<div class="field">${labelHtml}${inner}</div>`; }
+
+/* ---------------- app state ---------------- */
+let asOfDate = new Date().toISOString().slice(0,10);
+let view = "overview";
+let listFilter = "all";
+let activeIndex = 0;
+const state = { records: [] };
+
+const DETAIL_SECTIONS = [
+  {n:1, id:"sec-resignation", title:"Resignation & Checklist", tag:"FR-1.1 – FR-1.4"},
+  {n:2, id:"sec-clearance", title:"Clearance / No Dues", tag:"FR-2.1 – FR-2.3"},
+  {n:3, id:"sec-comp", title:"Compensation Calculation", tag:"FR-3.1 – FR-3.11"},
+  {n:4, id:"sec-tds", title:"TDS & FnF SLA Workflow", tag:"New — Open Item 1"},
+  {n:5, id:"sec-sheet", title:"FnF Sheet & Email", tag:"FR-4.1 – FR-4.3"},
+  {n:6, id:"sec-payment", title:"Payment Processing", tag:"FR-5.1 – FR-5.2"},
+  {n:7, id:"sec-closure", title:"Closure Documentation", tag:"FR-6.1 – FR-6.2"},
+];
+let activeSection = "sec-resignation";
+let visitedSections = new Set(["sec-resignation"]);
+
+/* ---------------- TDS & FnF SLA workflow actions ---------------- */
+function runTdsCalc(i){ state.records[i].sla.tdsCalc = 'completed'; render(); }
+function sendTaxTeamEmail(i){ state.records[i].sla.taxEmailSentAt = asOfDate; render(); }
+function sendTaxReminder(i){ state.records[i].sla.reminderSent = true; render(); }
+function setTaxApproval(i, val){ state.records[i].sla.taxApproval = val; render(); }
+function setEmployeeSlaAck(i, val){ state.records[i].sla.ack = val; render(); }
+
+/* ---------------- navigation ---------------- */
+function setTab(v){ view=v; if(v==='detail' && state.records.length && activeIndex==null) activeIndex=0; render(); }
+function openList(filterKey){ view='list'; listFilter=filterKey; render(); }
+function openRecord(i){ activeIndex=i; view='detail'; activeSection='sec-resignation'; visitedSections=new Set(['sec-resignation']); render(); window.scrollTo(0,0); }
+async function addRecord(){
+  const rec = await apiCreate();
+  state.records.push(rec);
+  activeIndex = state.records.length-1;
+  lastSynced[rec.id] = JSON.stringify(rec);
+  render();
+}
+async function removeRecord(i){
+  const rec = state.records[i];
+  await apiDelete(rec.id);
+  state.records.splice(i,1);
+  if(activeIndex>=state.records.length) activeIndex=state.records.length-1;
+  render();
+}
+
+function jumpTo(id){
+  activeSection = id;
+  visitedSections.add(id);
+  render();
+  const el = document.getElementById(id);
+  if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function sendEmail(){
+  const rec = state.records[activeIndex];
+  rec.ack.shared = true;
+  if(!rec.emailSentDate) rec.emailSentDate = asOfDate;
+  render();
+}
+
+/* ---------------- render: tabbar ---------------- */
+function renderTabbar(){
+  const el = document.getElementById('tabbar');
+  el.innerHTML = `
+    <div class="tab ${view==='overview'?'active':''}" onclick="setTab('overview')">Overview</div>
+    <div class="tab ${view==='list'?'active':''}" onclick="openList('all')">All Employees</div>
+    <div class="tab ${view==='detail'?'active':''}" onclick="setTab('detail')">Employee Detail</div>
+  `;
+}
+
+/* ---------------- render: overview ---------------- */
+function kpiCard(key,label,value,tone,clickable=true){
+  return `<div class="kpi-card tone-${tone}" ${clickable?`onclick="openList('${key}')"`:''} style="${clickable?'':'cursor:default;'}">
+    <div class="kpi-value">${value}</div>
+    <div class="kpi-label">${label}</div>
+  </div>`;
+}
+function renderOverview(){
+  const t = totals();
+  const pmsValue = pmsSummary
+    ? (pmsSummary.error ? '—' : pmsSummary.servingNoticeCount)
+    : '…';
+  const pmsResignedValue = pmsSummary
+    ? (pmsSummary.error ? '—' : pmsSummary.resignedCount)
+    : '…';
+  return `
+  <div class="panel">
+    <div class="panel-head"><h2>FnF Overview</h2><span class="frtag">as of ${asOfDate}</span></div>
+    <div class="panel-sub">Click any card to see the matching employee list. Adjust "As of" to see how SLA status shifts with time.</div>
+    <div class="field" style="max-width:220px;margin-bottom:20px;">
+      <label>As-of Date</label>
+      <input type="date" value="${asOfDate}" oninput="asOfDate=this.value;loadPmsSummary();render()">
+    </div>
+    <div class="kpi-grid">
+      ${kpiCard('exits','Total Exits', t.exits, 'navy')}
+      ${kpiCard('active','FnF Active', t.active, 'blue')}
+      ${kpiCard('pending','FnF Pending', t.pending, 'amber')}
+      ${kpiCard('closed','FnF Closed', t.closed, 'green')}
+      ${kpiCard('slaWithin','Email Sent Within 2 Days', t.slaWithin, 'green')}
+      ${kpiCard('slaBreached','Email Not Sent Within 2 Days', t.slaBreached, 'red')}
+    </div>
+    <hr class="divider">
+    <div class="panel-sub" style="margin-top:0;">Live from PMS (Kites API) — employees with a recorded resignation date.</div>
+    <div class="kpi-grid">
+      ${kpiCard('pmsResigned','Resigned (PMS)', pmsResignedValue, 'navy', false)}
+      ${kpiCard('pmsNotice','Serving Notice Period (PMS)', pmsValue, 'amber', false)}
+    </div>
+    ${pmsSummary && pmsSummary.error ? `<div class="callout danger" style="margin-top:14px;">Could not reach PMS API — showing last known / placeholder values.</div>` : ''}
+  </div>`;
+}
+
+/* ---------------- render: list ---------------- */
+const filterTitles = { all:'All Employees', exits:'All Employees (Total Exits)', active:'FnF Active', pending:'FnF Pending', closed:'FnF Closed', slaWithin:'Email Sent Within 2 Days', slaBreached:'Email Not Sent Within 2 Days' };
+function filteredRecords(){
+  const r = state.records;
+  switch(listFilter){
+    case 'active': return r.filter(x=>recStatus(x)==='active');
+    case 'closed': return r.filter(x=>recStatus(x)==='closed');
+    case 'pending': return r.filter(x=>recStatus(x)==='pending');
+    case 'slaWithin': return r.filter(x=>recSla(x).state==='within');
+    case 'slaBreached': return r.filter(x=>recSla(x).state==='breached');
+    default: return r;
+  }
+}
+function renderList(){
+  const rows = filteredRecords();
+  return `
+  <div class="panel">
+    <div class="panel-head"><h2>${filterTitles[listFilter]||'Employees'}</h2><span class="frtag">${rows.length} record(s)</span></div>
+    <div class="panel-sub">Summary view only — open a name to see the full consolidated record.</div>
+    <table class="ledger queue-table">
+      <tr><th>EmpId</th><th>Name</th><th>Department</th><th>LWD</th><th>Status</th><th>SLA</th><th></th></tr>
+      ${rows.map((rec)=>{
+        const i = state.records.indexOf(rec);
+        const st = recStatus(rec);
+        const sla = recSla(rec);
+        return `<tr>
+          <td>${rec.empId||'—'}</td>
+          <td><a href="javascript:void(0)" onclick="openRecord(${i})" style="color:var(--navy);font-weight:600;text-decoration:none;">${rec.name||'(unnamed)'}</a></td>
+          <td>${rec.department||'—'}</td><td>${rec.lwd||'—'}</td>
+          <td><span class="badge status-${st}">${st.toUpperCase()}</span></td>
+          <td><span class="badge sla-${sla.state}">${sla.label}</span></td>
+          <td><button class="btn gold" style="padding:6px 12px;font-size:11px;" onclick="openRecord(${i})">Open →</button></td>
+        </tr>`;
+      }).join('')}
+    </table>
+    <div class="actions">
+      <button class="btn secondary" onclick="setTab('overview')">← Back to Overview</button>
+      <button class="btn secondary" onclick="addRecord()">+ Add Employee</button>
+    </div>
+  </div>`;
+}
+
+/* ---------------- render: consolidated employee detail ---------------- */
+function renderDetail(){
+  if(!state.records.length){
+    return `<div class="panel"><div class="panel-sub">No employees yet.</div><button class="btn" onclick="addRecord()">+ Add Employee</button></div>`;
+  }
+  if(activeIndex==null || activeIndex>=state.records.length) activeIndex = 0;
+  const rec = state.records[activeIndex];
+  const r = calc(rec);
+  const isPay = r.net >= 0;
+  const st = recStatus(rec);
+  const sla = recSla(rec);
+  const tdsGross = Number(rec.comp.grossSalary||0);
+  const tdsBasic = tdsGross * 0.5;
+  const tdsHra = tdsBasic * 0.5;
+  const tdsOther = tdsGross - tdsBasic - tdsHra;
+  const allChecklistDone = rec.checklist.every(x=>x.done);
+
+  return `
+  <div class="panel">
+    <div class="emp-picker">
+      <label>Select Exited Employee</label>
+      <select onchange="activeIndex=parseInt(this.value);activeSection='sec-resignation';visitedSections=new Set(['sec-resignation']);render();window.scrollTo(0,0)">
+        ${state.records.map((x,i)=>`<option value="${i}" ${i===activeIndex?'selected':''}>${x.name||'(unnamed)'} — ${x.empId||'no id'}</option>`).join('')}
+      </select>
+      <button class="btn secondary" style="padding:8px 14px;font-size:11px;" onclick="addRecord()">+ Add Employee</button>
+      <button class="btn secondary" style="padding:8px 14px;font-size:11px;" onclick="removeRecord(${activeIndex})">Remove This Record</button>
+    </div>
+
+    <div class="emp-header">
+      <div>
+        <h2>${rec.name || '(unnamed employee)'}</h2>
+        <div class="sub">${rec.empId||'—'} · ${rec.department||'—'} · ${rec.designation||'—'} · ${rec.location||'—'}</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <span class="badge status-${st}">${st.toUpperCase()}</span>
+        <span class="badge sla-${sla.state}">${sla.label}</span>
+      </div>
+    </div>
+
+    <div class="gist-row">
+      <div class="gist-card"><div class="g-label">LWD</div><div class="g-value" style="font-size:15px;">${rec.lwd||'—'}</div></div>
+      <div class="gist-card"><div class="g-label">${isPay?'Net Payable':'Net Recoverable'}</div><div class="g-value">${fmt(Math.abs(r.net))}</div></div>
+      <div class="gist-card"><div class="g-label">Checklist</div><div class="g-value" style="font-size:15px;">${rec.checklist.filter(x=>x.done).length}/${rec.checklist.length} done</div></div>
+      <div class="gist-card"><div class="g-label">Email Status</div><div class="g-value" style="font-size:15px;">${rec.emailSentDate? 'Sent '+rec.emailSentDate : 'Not sent'}</div></div>
+      <div class="gist-card"><div class="g-label">Acknowledged</div><div class="g-value" style="font-size:15px;">${rec.ack.acknowledged?'Yes':'No'}</div></div>
+    </div>
+
+    <div class="detail-layout">
+      <div class="detail-stepper">
+        <div class="detail-stepper-title">Record Sections</div>
+        <div>${DETAIL_SECTIONS.map(s=>`
+          <div class="detail-step ${activeSection===s.id?'active':''} ${visitedSections.has(s.id)?'visited':''}" onclick="jumpTo('${s.id}')">
+            <div class="detail-step-num">${visitedSections.has(s.id) ? '✓' : String(s.n).padStart(2,'0')}</div>
+            <div class="detail-step-label">${s.title}<small>${s.tag}</small></div>
+          </div>`).join('')}
+        </div>
+      </div>
+      <div class="detail-content">
+
+    <div class="section" id="sec-resignation">
+      <div class="section-title"><span class="num">1</span>Resignation, Checklist &amp; LWD <span class="frtag" style="margin-left:auto;">FR-1.1 – FR-1.4</span></div>
+      <div class="field-grid">
+        ${field(`<label>Employee Name</label>`, `<input type="text" value="${rec.name}" oninput="state.records[${activeIndex}].name=this.value">`)}
+        ${field(`<label>Employee ID</label>`, `<input type="text" value="${rec.empId}" oninput="state.records[${activeIndex}].empId=this.value">`)}
+        ${field(`<label>Department</label>`, `<input type="text" value="${rec.department}" oninput="state.records[${activeIndex}].department=this.value">`)}
+        ${field(`<label>Designation</label>`, `<input type="text" value="${rec.designation}" oninput="state.records[${activeIndex}].designation=this.value">`)}
+        ${field(`<label>Reporting Manager</label>`, `<input type="text" value="${rec.manager}" oninput="state.records[${activeIndex}].manager=this.value">`)}
+        ${field(`<label>Resignation Date (DOR)</label>`, `<input type="date" value="${rec.dor}" oninput="state.records[${activeIndex}].dor=this.value">`)}
+      </div>
+      <div class="toggle-row" style="margin-top:14px;">
+        <div class="t-label">Reporting Manager has accepted resignation <small>FR-1.1</small></div>
+        <label class="switch"><input type="checkbox" ${rec.managerApproved?'checked':''} onchange="state.records[${activeIndex}].managerApproved=this.checked;render()"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <div class="t-label">HR has updated resignation status in PMS <small>FR-1.2</small></div>
+        <label class="switch"><input type="checkbox" ${rec.pmsUpdated?'checked':''} onchange="state.records[${activeIndex}].pmsUpdated=this.checked;render()"><span class="slider"></span></label>
+      </div>
+      <ul class="checklist" style="margin-top:14px;">
+        ${rec.checklist.map((it,i)=>`<li><input type="checkbox" ${it.done?'checked':''} onchange="state.records[${activeIndex}].checklist[${i}].done=this.checked;render()"> ${it.label}</li>`).join('')}
+      </ul>
+      <div class="field-grid" style="margin-top:14px;">
+        ${field(`<label>Last Working Day (LWD) <span class="fr">FR-1.4</span></label>`, `<input type="date" value="${rec.lwd}" ${!allChecklistDone?'disabled':''} oninput="state.records[${activeIndex}].lwd=this.value;render()">`)}
+      </div>
+      ${!allChecklistDone ? `<div class="callout danger">Checklist incomplete — LWD cannot be finalized until all items are cleared.</div>` : ''}
+    </div>
+
+    <hr class="divider">
+
+    <div class="section" id="sec-clearance">
+      <div class="section-title"><span class="num">2</span>Clearance Verification — No Dues Panel <span class="frtag" style="margin-left:auto;">FR-2.1 – FR-2.3</span></div>
+      <div class="no-dues-grid">
+        <div class="dues-card">
+          <h4>Exam Dues</h4>
+          <div class="field-grid" style="grid-template-columns:1fr 1fr;">
+            ${field(`<label>Status <span class="fr">FR-2.2</span></label>`, `<select onchange="state.records[${activeIndex}].dues.exam.required=this.value;render()">
+              <option value="not_required" ${rec.dues.exam.required==='not_required'?'selected':''}>Not Required</option>
+              <option value="yes_required" ${rec.dues.exam.required==='yes_required'?'selected':''}>Yes Required</option>
+            </select>`)}
+            ${field(`<label>Amount</label>`, `<input type="number" value="${rec.dues.exam.amount}" ${rec.dues.exam.required!=='yes_required'?'disabled':''} oninput="state.records[${activeIndex}].dues.exam.amount=this.value;render()">`)}
+          </div>
+        </div>
+        <div class="dues-card">
+          <h4>WFH Dues</h4>
+          ${field(`<label>WFH Balance <span class="fr">FR-2.3 — negative = deduct</span></label>`, `<input type="number" value="${rec.dues.wfh.balance}" oninput="state.records[${activeIndex}].dues.wfh.balance=this.value;render()">`)}
+        </div>
+        <div class="dues-card">
+          <h4>Loan &amp; Advance <span class="badge flag">FR-3.9</span></h4>
+          ${field(`<label>Outstanding recovery</label>`, `<input type="number" value="${rec.dues.loanAdvance.amount}" oninput="state.records[${activeIndex}].dues.loanAdvance.amount=this.value;render()">`)}
+        </div>
+        <div class="dues-card" style="grid-column:1/-1;">
+          <h4>Notice Pay — HR sub-department <span class="badge flag">FR-3.5</span></h4>
+          <div class="toggle-row" style="margin-bottom:12px;">
+            <div class="t-label">Notice Period Pay applicable</div>
+            <label class="switch"><input type="checkbox" ${rec.dues.noticePay.applicable?'checked':''} onchange="state.records[${activeIndex}].dues.noticePay.applicable=this.checked;render()"><span class="slider"></span></label>
+          </div>
+          <div class="field-grid">
+            ${field(`<label>Date recorded in No Dues Panel</label>`, `<input type="date" value="${rec.dues.noticePay.date}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="state.records[${activeIndex}].dues.noticePay.date=this.value">`)}
+            ${field(`<label>Notice Pay amount <span class="fr">PF excluded</span></label>`, `<input type="number" value="${rec.dues.noticePay.amount}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="state.records[${activeIndex}].dues.noticePay.amount=this.value;render()">`)}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section" id="sec-comp">
+      <div class="section-title"><span class="num">3</span>Compensation &amp; Deduction Calculation <span class="frtag" style="margin-left:auto;">FR-3.1 – FR-3.11</span></div>
+      <div class="panel-sub" style="margin-top:-4px;">Formulas per §8 Business Rules. Deductions above are carried in automatically.</div>
+      <div class="field-grid">
+        ${field(`<label>Gross Salary (₹)</label>`, `<input type="number" value="${rec.comp.grossSalary}" oninput="state.records[${activeIndex}].comp.grossSalary=this.value;render()">`)}
+        ${field(`<label>EPF# (Employer PF base, ₹)</label>`, `<input type="number" value="${rec.comp.epf}" oninput="state.records[${activeIndex}].comp.epf=this.value;render()">`)}
+        ${field(`<label>Working Days <span class="fr">FR-3.1</span></label>`, `<input type="number" value="${rec.comp.workingDays}" oninput="state.records[${activeIndex}].comp.workingDays=this.value;render()">`)}
+        ${field(`<label>Present Days</label>`, `<input type="number" value="${rec.comp.presentDays}" oninput="state.records[${activeIndex}].comp.presentDays=this.value;render()">`)}
+        ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="number" step="0.1" value="${rec.comp.tenureYears}" oninput="state.records[${activeIndex}].comp.tenureYears=this.value;render()">`)}
+        ${field(`<label>TA Bill reconciliation (₹) <span class="fr">+owed / −recover</span></label>`, `<input type="number" value="${rec.comp.taBill}" oninput="state.records[${activeIndex}].comp.taBill=this.value;render()">`)}
+        ${field(`<label>NPS entry (₹)</label>`, `<input type="number" value="${rec.comp.nps}" oninput="state.records[${activeIndex}].comp.nps=this.value;render()">`)}
+        ${field(`<label>VPF entry (₹)</label>`, `<input type="number" value="${rec.comp.vpf}" oninput="state.records[${activeIndex}].comp.vpf=this.value;render()">`)}
+      </div>
+      <div class="callout danger" style="margin-top:18px;">
+        <b>Open Items — pending sign-off (§10):</b> TDS methodology and Incentive/PLI treatment are not finalized. Placeholders only.
+      </div>
+      <div class="field-grid">
+        ${field(`<label>TDS (₹) <span class="fr">Open Item 1</span></label>`, `<input type="number" value="${rec.comp.tds}" oninput="state.records[${activeIndex}].comp.tds=this.value;render()">`)}
+        ${field(`<label>Incentive / PLI (₹) <span class="fr">Open Item 2</span></label>`, `<input type="number" value="${rec.comp.pli}" oninput="state.records[${activeIndex}].comp.pli=this.value;render()">`)}
+      </div>
+      <table class="ledger" style="margin-top:18px;">
+        <tr><th>Computed Component</th><th class="num">Amount</th></tr>
+        <tr><td>Salary — Gross ÷ Working Days × Present Days</td><td class="num">${fmt(r.salary)}</td></tr>
+        <tr><td>PF — EPF# ÷ Working Days × Present Days</td><td class="num">${fmt(r.pf)}</td></tr>
+        <tr><td>Gratuity ${rec.comp.tenureYears>5?'':'(not applicable — tenure ≤ 5 yrs)'}</td><td class="num">${fmt(r.gratuity)}</td></tr>
+        <tr><td>Notice Pay ${rec.dues.noticePay.applicable?'':'(not applicable)'}</td><td class="num">${fmt(r.noticePay)}</td></tr>
+      </table>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section" id="sec-tds">
+      <div class="section-title"><span class="num">4</span>TDS Calculation &amp; Approval Workflow <span class="frtag" style="margin-left:auto;">New — automates §10 Open Item 1</span></div>
+
+      <table class="ledger">
+        <tr><th>Salary Component</th><th class="num">Amount</th></tr>
+        <tr><td>Gross Salary</td><td class="num">${fmt(tdsGross)}</td></tr>
+        <tr><td>Basic (50% of Gross)</td><td class="num">${fmt(tdsBasic)}</td></tr>
+        <tr><td>HRA (50% of Basic)</td><td class="num">${fmt(tdsHra)}</td></tr>
+        <tr><td>Other Allowances (Gross − Basic − HRA)</td><td class="num">${fmt(tdsOther)}</td></tr>
+        <tr class="subtotal"><td>Estimated TDS (placeholder — Open Item 1)</td><td class="num">${fmt(r.tds)}</td></tr>
+      </table>
+
+      <hr class="divider">
+
+      <h4 style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-soft);margin:0 0 14px;">TDS &amp; FnF SLA Tracker</h4>
+
+      <table class="ledger">
+        <tr><th>Stage</th><th>Target SLA</th><th>Status</th><th></th></tr>
+        <tr>
+          <td>TDS Calculation</td>
+          <td>${shiftDate(rec.lwd,-1)} · 9:00/9:30 AM</td>
+          <td><span class="badge ${rec.sla.tdsCalc==='completed'?'status-closed':'status-pending'}">${rec.sla.tdsCalc==='completed'?'COMPLETED':'PENDING'}</span></td>
+          <td><button class="btn secondary" style="padding:6px 12px;font-size:11px;" onclick="runTdsCalc(${activeIndex})">Run Calculation</button></td>
+        </tr>
+        <tr>
+          <td>Tax Team Approval (Sarika)</td>
+          <td>By EOD</td>
+          <td>
+            <select onchange="setTaxApproval(${activeIndex}, this.value)" ${!rec.sla.taxEmailSentAt?'disabled':''}>
+              <option value="pending" ${rec.sla.taxApproval==='pending'?'selected':''}>Pending</option>
+              <option value="approved" ${rec.sla.taxApproval==='approved'?'selected':''}>Approved</option>
+              <option value="changes_required" ${rec.sla.taxApproval==='changes_required'?'selected':''}>Changes Required</option>
+            </select>
+          </td>
+          <td><button class="btn secondary" style="padding:6px 12px;font-size:11px;" ${rec.sla.tdsCalc!=='completed'?'disabled':''} onclick="sendTaxTeamEmail(${activeIndex})">${rec.sla.taxEmailSentAt?'Re-send Review Email':'Send Review Email'}</button></td>
+        </tr>
+        <tr>
+          <td>Tax Team Reminder</td>
+          <td>5:00 PM</td>
+          <td><span class="badge ${rec.sla.taxApproval!=='pending' ? 'status-closed' : (rec.sla.reminderSent?'status-active':'status-pending')}">${rec.sla.taxApproval!=='pending' ? 'NOT REQUIRED' : (rec.sla.reminderSent?'SENT':'PENDING')}</span></td>
+          <td><button class="btn secondary" style="padding:6px 12px;font-size:11px;" ${rec.sla.taxApproval!=='pending' || !rec.sla.taxEmailSentAt ?'disabled':''} onclick="sendTaxReminder(${activeIndex})">Send Reminder</button></td>
+        </tr>
+      </table>
+
+      <div class="callout" style="margin-top:18px;">
+        <b>Tax Team email preview:</b> "Employee's tentative TDS/FnF calculation is ready. Please review and confirm by EOD."
+      </div>
+      <div class="callout">
+        <b>Employee email preview:</b> "Please review and acknowledge your tentative FnF. Once acknowledged, the final FnF will be processed and payment will be initiated as per the defined timeline." (sent to official + personal email)
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section" id="sec-sheet">
+      <div class="section-title"><span class="num">5</span>FnF Settlement Sheet — Review &amp; Send <span class="frtag" style="margin-left:auto;">FR-4.1 – FR-4.3</span></div>
+      <table class="ledger">
+        <tr><th>Earnings</th><th class="num">₹</th></tr>
+        <tr><td>Salary (pro-rated)</td><td class="num">${fmt(r.salary)}</td></tr>
+        <tr><td>PF</td><td class="num">${fmt(r.pf)}</td></tr>
+        <tr><td>Gratuity</td><td class="num">${fmt(r.gratuity)}</td></tr>
+        <tr><td>Notice Pay</td><td class="num">${fmt(r.noticePay)}</td></tr>
+        <tr><td>TA Bill (if owed)</td><td class="num">${fmt(r.taBill>0?r.taBill:0)}</td></tr>
+        <tr class="credit"><td>Incentive / PLI <span class="badge flag" style="margin-left:6px;">unconfirmed</span></td><td class="num">${fmt(r.pli)}</td></tr>
+        <tr class="subtotal"><td>Total Earnings</td><td class="num">${fmt(r.earnings)}</td></tr>
+      </table>
+      <table class="ledger" style="margin-top:18px;">
+        <tr><th>Deductions</th><th class="num">₹</th></tr>
+        <tr class="deduct"><td>Exam Dues</td><td class="num">${fmt(r.examDeduct)}</td></tr>
+        <tr class="deduct"><td>WFH Dues</td><td class="num">${fmt(r.wfhDeduct)}</td></tr>
+        <tr class="deduct"><td>Loan &amp; Advance Recovery</td><td class="num">${fmt(r.loanAdv)}</td></tr>
+        <tr class="deduct"><td>NPS entry</td><td class="num">${fmt(r.nps)}</td></tr>
+        <tr class="deduct"><td>VPF entry</td><td class="num">${fmt(r.vpf)}</td></tr>
+        <tr class="deduct"><td>TA Bill (if recoverable)</td><td class="num">${fmt(r.taBill<0?Math.abs(r.taBill):0)}</td></tr>
+        <tr class="deduct"><td>TDS <span class="badge flag" style="margin-left:6px;">unconfirmed</span></td><td class="num">${fmt(r.tds)}</td></tr>
+        <tr class="subtotal"><td>Total Deductions</td><td class="num">${fmt(r.deductions)}</td></tr>
+      </table>
+      <table class="ledger">
+        <tr class="net ${isPay?'pay':'recover'}"><td>${isPay? 'Net Payable to Employee' : 'Net Recoverable from Employee'} <span class="fr" style="font-family:'IBM Plex Mono',monospace;font-size:11px;">FR-4.3</span></td><td class="num">${fmt(Math.abs(r.net))}</td></tr>
+      </table>
+
+      ${rec.emailSentDate ? `<div class="callout success" style="margin-top:18px;"><b>Email sent</b> to ${rec.contact||'employee'} on ${rec.emailSentDate}. LWD → email gap: ${daysBetween(rec.lwd, rec.emailSentDate)} day(s).</div>` : `<div class="callout" style="margin-top:18px;">Not yet sent to the employee. Target: within 2 days of LWD (${rec.lwd||'LWD not set'}).</div>`}
+
+      <div class="actions">
+        <button class="btn secondary" onclick="window.print()">Print / Export Sheet</button>
+        <button class="btn gold" onclick="sendEmail()">${rec.emailSentDate? 'Re-send Email to Employee' : 'Send Email to Employee →'}</button>
+      </div>
+
+      <div class="toggle-row" style="margin-top:18px;">
+        <div class="t-label">Employee has reviewed &amp; acknowledged the sheet <small>Success Criterion §12</small></div>
+        <label class="switch"><input type="checkbox" ${rec.ack.acknowledged?'checked':''} ${!rec.ack.shared?'disabled':''} onchange="state.records[${activeIndex}].ack.acknowledged=this.checked;render()"><span class="slider"></span></label>
+      </div>
+      ${rec.ack.acknowledged ? `<span class="stamp">ACKNOWLEDGED</span>` : ''}
+    </div>
+
+    <hr class="divider">
+
+    <div class="section" id="sec-payment">
+      <div class="section-title"><span class="num">6</span>Payment Processing <span class="frtag" style="margin-left:auto;">FR-5.1 – FR-5.2</span></div>
+      <div class="toggle-row">
+        <div class="t-label">HR has informed AP team</div>
+        <label class="switch"><input type="checkbox" ${rec.payment.apInformed?'checked':''} onchange="state.records[${activeIndex}].payment.apInformed=this.checked;render()"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <div class="t-label">AP has processed &amp; confirmed payment</div>
+        <label class="switch"><input type="checkbox" ${rec.payment.apConfirmed?'checked':''} ${!rec.payment.apInformed?'disabled':''} onchange="state.records[${activeIndex}].payment.apConfirmed=this.checked;render()"><span class="slider"></span></label>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section" id="sec-closure">
+      <div class="section-title"><span class="num">7</span>Closure Documentation <span class="frtag" style="margin-left:auto;">FR-6.1 – FR-6.2</span></div>
+      <div class="toggle-row">
+        <div class="t-label">Experience Letter issued</div>
+        <label class="switch"><input type="checkbox" ${rec.closure.expLetter?'checked':''} onchange="state.records[${activeIndex}].closure.expLetter=this.checked;render()"><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <div class="t-label">Last 3 months' salary slips shared</div>
+        <label class="switch"><input type="checkbox" ${rec.closure.slips?'checked':''} onchange="state.records[${activeIndex}].closure.slips=this.checked;render()"><span class="slider"></span></label>
+      </div>
+      ${rec.closure.expLetter && rec.closure.slips ? `<div class="callout success"><b>Process complete.</b> All §12 success criteria satisfied for this employee's FnF settlement.</div><span class="stamp">CLOSED</span>` : ''}
+    </div>
+
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ---------------- main render ---------------- */
+function render(){
+  renderTabbar();
+  const app = document.getElementById('app');
+  if(view==='overview') app.innerHTML = renderOverview();
+  else if(view==='list') app.innerHTML = renderList();
+  else app.innerHTML = renderDetail();
+  scheduleSync();
+}
+
+/* ---------------- boot ---------------- */
+(async function init(){
+  try {
+    state.records = await apiList();
+    state.records.forEach(r => { lastSynced[r.id] = JSON.stringify(r); });
+    setSyncStatus('Synced');
+  } catch(e){
+    console.error('Failed to load records from API', e);
+    setSyncStatus('Load failed — see console');
+  }
+  render();
+  loadPmsSummary();
+})();
+</script>
+</body>
+</html>

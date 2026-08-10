@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fnf-prototype",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["-e", "require('http').createServer((req,res)=>{const fs=require('fs');const path=require('path');const root='C:/Users/tanya/Desktop/FnF Prototype';let p=decodeURIComponent(req.url.split('?')[0]);if(p==='/')p='/FnF_Settlement_Prototype.html';const file=path.join(root,p);fs.readFile(file,(err,data)=>{if(err){res.writeHead(404);res.end('Not found');return;}const ext=path.extname(file);const mime={'.html':'text/html','.js':'text/javascript','.css':'text/css','.json':'application/json'}[ext]||'application/octet-stream';res.writeHead(200,{'Content-Type':mime});res.end(data);});}).listen(5500,()=>console.log('serving on 5500'))"],
+      "port": 5500
+    },
+    {
+      "name": "fnf-app",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/Users/tanya/Desktop/FnF Prototype/server.js"],
+      "port": 4174
+    }
+  ]
+}

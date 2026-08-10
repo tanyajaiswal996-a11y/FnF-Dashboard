@@ -1,0 +1,7 @@
+{
+  "name": "fnf-settlement",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js"
+  }
+}
