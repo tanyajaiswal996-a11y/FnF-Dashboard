@@ -376,6 +376,7 @@ function newRecord(seed){
 let asOfDate = "2026-07-31";
 let view = "overview";      // 'overview' | 'list' | 'detail'
 let listFilter = "all";
+let listSortDir = "asc";
 let activeIndex = 0;
 
 const DETAIL_SECTIONS = [
@@ -511,6 +512,17 @@ function quarterOptions(){
   }
   return opts;
 }
+function quarterKeyOf(dateStr){
+  if(!dateStr) return null;
+  const d = new Date(dateStr);
+  if(isNaN(d.getTime())) return null;
+  const m = d.getMonth(), y = d.getFullYear();
+  return `${y}-Q${m<=2?1:m<=5?2:m<=8?3:4}`;
+}
+function recordsInSelectedQuarter(){
+  const qKey = quarterOf(asOfDate).key;
+  return state.records.filter(x=>quarterKeyOf(x.lwd)===qKey);
+}
 function fnfDueState(rec){
   const closed = recStatus(rec)==='closed';
   if(closed) return null;
@@ -526,7 +538,7 @@ function fnfDoneState(rec){
   return gapHours <= 48 ? 'within48' : 'after48';
 }
 function totals(){
-  const r = state.records;
+  const r = recordsInSelectedQuarter();
   return {
     exits: r.length,
     dueKite: r.filter(x=>fnfDueState(x)==='kite').length,
@@ -571,9 +583,9 @@ function renderTabbar(){
 }
 
 /* ---------------- render: overview ---------------- */
-function kpiCard(key,label,value,tone){
+function kpiCard(key,label,value,tone,pct=null){
   return `<div class="kpi-card tone-${tone}" onclick="openList('${key}')">
-    <div class="kpi-value">${value}</div>
+    <div class="kpi-value">${value}${pct!=null?` <span style="font-size:16px;color:var(--ink-soft);font-weight:500;">(${pct}%)</span>`:''}</div>
     <div class="kpi-label">${label}</div>
   </div>`;
 }
@@ -595,8 +607,8 @@ function renderOverview(){
       ${kpiCard('exits','Total Resignation', t.exits, 'navy')}
       ${kpiCard('dueKite','FnF Due — Pending from Kite', t.dueKite, 'amber')}
       ${kpiCard('dueHr','FnF Due — Pending from HR', t.dueHr, 'blue')}
-      ${kpiCard('doneWithin48','FnF Done — Within 48 Hours', t.doneWithin48, 'green')}
-      ${kpiCard('doneAfter48','FnF Done — After 48 Hours', t.doneAfter48, 'red')}
+      ${kpiCard('doneWithin48','FnF Done — Within 48 Hours', t.doneWithin48, 'green', t.exits ? Math.round(t.doneWithin48/t.exits*100) : 0)}
+      ${kpiCard('doneAfter48','FnF Done — After 48 Hours', t.doneAfter48, 'red', t.exits ? Math.round(t.doneAfter48/t.exits*100) : 0)}
     </div>
   </div>`;
 }
@@ -604,7 +616,7 @@ function renderOverview(){
 /* ---------------- render: list ---------------- */
 const filterTitles = { all:'All Employees', exits:'All Employees (Total Resignation)', dueKite:'FnF Due — Pending from Kite', dueHr:'FnF Due — Pending from HR', doneWithin48:'FnF Done — Within 48 Hours', doneAfter48:'FnF Done — After 48 Hours' };
 function filteredRecords(){
-  const r = state.records;
+  const r = listFilter==='all' ? state.records : recordsInSelectedQuarter();
   switch(listFilter){
     case 'dueKite': return r.filter(x=>fnfDueState(x)==='kite');
     case 'dueHr': return r.filter(x=>fnfDueState(x)==='hr');
@@ -613,14 +625,20 @@ function filteredRecords(){
     default: return r;
   }
 }
+function toggleLwdSort(){ listSortDir = listSortDir==='asc' ? 'desc' : 'asc'; render(); }
 function renderList(){
-  const rows = filteredRecords();
+  const rows = filteredRecords().slice().sort((a,b)=>{
+    if(!a.lwd && !b.lwd) return 0;
+    if(!a.lwd) return 1;
+    if(!b.lwd) return -1;
+    return listSortDir==='asc' ? a.lwd.localeCompare(b.lwd) : b.lwd.localeCompare(a.lwd);
+  });
   return `
   <div class="panel">
-    <div class="panel-head"><h2>${filterTitles[listFilter]||'Employees'}</h2><span class="frtag">${rows.length} record(s)</span></div>
-    <div class="panel-sub">Summary view only — open a name to see the full consolidated record.</div>
+    <div class="panel-head"><h2>${filterTitles[listFilter]||'Employees'}</h2><span class="frtag">${listFilter!=='all' ? quarterOf(asOfDate).label + ' · ' : ''}${rows.length} record(s)</span></div>
+    <div class="panel-sub">${listFilter!=='all' ? `Filtered to ${quarterOf(asOfDate).label} (by LWD). ` : ''}Summary view only — open a name to see the full consolidated record.</div>
     <table class="ledger queue-table">
-      <tr><th>EmpId</th><th>Name</th><th>Department</th><th>LWD</th><th>Status</th><th>SLA</th><th></th></tr>
+      <tr><th>EmpCode</th><th>Name</th><th>Department</th><th style="cursor:pointer;user-select:none;" onclick="toggleLwdSort()">LWD ${listSortDir==='asc'?'↑':'↓'}</th><th>Status</th><th>SLA</th><th></th></tr>
       ${rows.map((rec)=>{
         const i = state.records.indexOf(rec);
         const st = recStatus(rec);

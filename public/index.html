@@ -191,6 +191,7 @@ input:focus, select:focus{outline:2px solid var(--gold-bright);outline-offset:1p
 }
 
 .kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:6px;}
+@media (max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}
 .kpi-card{
   background:var(--card);border:1px solid var(--line);border-left:5px solid var(--navy);
   border-radius:8px;padding:20px 22px;cursor:pointer;transition:transform .15s ease, box-shadow .15s ease;
@@ -215,7 +216,7 @@ input:focus, select:focus{outline:2px solid var(--gold-bright);outline-offset:1p
 .emp-header h2{font-family:"Fraunces",serif;font-weight:500;font-size:26px;margin:0 0 4px;}
 .emp-header .sub{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-soft);}
 
-.gist-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px;}
+.gist-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;}
 .gist-card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px 16px;}
 .gist-card .g-label{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-soft);}
 .gist-card .g-value{font-family:"Fraunces",serif;font-size:20px;margin-top:4px;color:var(--ink);}
@@ -266,20 +267,6 @@ async function apiPatch(id, patch){ const r = await fetch('/api/records/' + id, 
 async function apiCreate(seed){ const r = await fetch('/api/records', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(seed||{})}); return r.json(); }
 async function apiDelete(id){ await fetch('/api/records/' + id, {method:'DELETE'}); }
 
-/* ---------------- PMS (live employee data) ---------------- */
-let pmsSummary = null; // { resignedCount, servingNoticeCount, employees } | { error: true }
-async function loadPmsSummary(){
-  try{
-    const r = await fetch('/api/pms/notice-period-summary?asOf=' + asOfDate);
-    if(!r.ok) throw new Error('request failed');
-    pmsSummary = await r.json();
-  }catch(e){
-    console.error('PMS summary load failed', e);
-    pmsSummary = { error:true };
-  }
-  render();
-}
-
 let syncTimer = null;
 let lastSynced = {};
 function setSyncStatus(text){ const el = document.getElementById('sync-status'); if(el) el.textContent = text; }
@@ -322,6 +309,54 @@ function recStatus(rec){
   if(rec.started) return 'active';
   return 'pending';
 }
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+function settlementMonthLabels(lwd){
+  if(!lwd) return { current:'Current Month', previous:'Previous Month' };
+  const d = new Date(lwd);
+  return { current: MONTH_NAMES[d.getMonth()], previous: MONTH_NAMES[(d.getMonth()+11)%12] };
+}
+function settlementCalc(rec){
+  const e = (rec.settlement && rec.settlement.earnings) || {};
+  const d = (rec.settlement && rec.settlement.deductions) || {};
+  const n = v => Number(v||0);
+  const earningsTotal = n(e.salaryCurrentMonth)+n(e.salaryPreviousMonth)+n(e.incentives)+n(e.taBillPositive)+n(e.gratuity)+n(e.otherReimbursement)+n(e.noticePeriodPay);
+  const deductionsTotal = n(d.pfCurrentMonth)+n(d.pfPreviousMonth)+n(d.examDues)+n(d.wfhDues)+n(d.nps)+n(d.vpf)+n(d.taBillNegative)+n(d.loanAdvances)+n(d.personalRides)+n(d.pluxeeMeal)+n(d.esi)+n(d.tds)+n(d.pt);
+  return { earningsTotal, deductionsTotal, netPayable: earningsTotal - deductionsTotal };
+}
+const MANDATORY_HOLIDAYS = [[0,1],[0,26],[7,15],[9,2]]; // [month(0-idx), day]
+function parseYMD(s){ const [y,m,d] = s.split('-').map(Number); return {y, m:m-1, d}; }
+function isWeekendUTC(y,m,d){ const day = new Date(Date.UTC(y,m,d)).getUTCDay(); return day===0||day===6; }
+function isMandatoryHoliday(m,d){ return MANDATORY_HOLIDAYS.some(([hm,hd])=>hm===m&&hd===d); }
+function daysInMonth(y,m){ return new Date(Date.UTC(y,m+1,0)).getUTCDate(); }
+function countEligibleDays(y,m,fromDay,toDay){
+  let count=0;
+  for(let d=fromDay; d<=toDay; d++){
+    if(isWeekendUTC(y,m,d)) continue;
+    if(isMandatoryHoliday(m,d)) continue;
+    count++;
+  }
+  return count;
+}
+// Working Days = every day in the LWD's month except Sat/Sun and the 4 mandatory
+// holidays (only when they fall on a weekday). Present Days = the same count but
+// only through the LWD (inclusive) — mirrors lib/calc.js's computeWorkingPresentDays.
+function computeWorkingPresentDays(lwd, fallbackDate){
+  const p = lwd ? parseYMD(lwd) : parseYMD(fallbackDate || new Date().toISOString().slice(0,10));
+  const total = daysInMonth(p.y, p.m);
+  const workingDays = countEligibleDays(p.y, p.m, 1, total);
+  const presentDays = lwd ? countEligibleDays(p.y, p.m, 1, p.d) : workingDays;
+  return { workingDays, presentDays };
+}
+// Salary Release Condition: if LWD falls in the month after DOR's month, the
+// withheld previous month's salary is released in full, alongside the current
+// month's salary pro-rated up to LWD. Same month for both = nothing withheld.
+function computeSalarySplit(grossSalary, dor, lwd, workingDays, presentDays){
+  const gross = Number(grossSalary||0);
+  const salaryCurrentMonth = workingDays>0 ? Math.round((gross/workingDays)*presentDays) : 0;
+  const spansMonthBoundary = dor && lwd && dor.slice(0,7) !== lwd.slice(0,7);
+  const salaryPreviousMonth = spansMonthBoundary ? gross : 0;
+  return { salaryCurrentMonth, salaryPreviousMonth };
+}
 function daysBetween(a,b){ return Math.round((new Date(b) - new Date(a)) / 86400000); }
 function shiftDate(dateStr, days){
   if(!dateStr) return '—';
@@ -340,15 +375,59 @@ function recSla(rec){
   if(elapsed>2) return {state:'breached', label:`${elapsed}d overdue — not sent`};
   return {state:'waiting', label:`Day ${elapsed} of 2 — not sent yet`};
 }
+function quarterOf(dateStr){
+  const d = new Date(dateStr);
+  const m = d.getMonth();
+  const y = d.getFullYear();
+  if(m<=2) return {label:`Jan – Mar ${y}`, key:`${y}-Q1`, start:`${y}-01-01`, end:`${y}-03-31`};
+  if(m<=5) return {label:`Apr – Jun ${y}`, key:`${y}-Q2`, start:`${y}-04-01`, end:`${y}-06-30`};
+  if(m<=8) return {label:`Jul – Sep ${y}`, key:`${y}-Q3`, start:`${y}-07-01`, end:`${y}-09-30`};
+  return {label:`Oct – Dec ${y}`, key:`${y}-Q4`, start:`${y}-10-01`, end:`${y}-12-31`};
+}
+function quarterOptions(){
+  const opts = [];
+  const now = new Date(asOfDate);
+  for(let i=-6;i<=2;i++){
+    const d = new Date(now.getFullYear(), now.getMonth() + i*3, 1);
+    const q = quarterOf(d.toISOString().slice(0,10));
+    if(!opts.find(o=>o.key===q.key)) opts.push(q);
+  }
+  return opts;
+}
+// Classifies a record into a quarter by LWD — the date that actually drives
+// the FnF timeline. Records with no LWD yet can't be placed in a quarter and
+// are excluded from every quarter view until one is set.
+function quarterKeyOf(dateStr){
+  if(!dateStr) return null;
+  const d = new Date(dateStr);
+  if(isNaN(d.getTime())) return null;
+  const m = d.getMonth(), y = d.getFullYear();
+  return `${y}-Q${m<=2?1:m<=5?2:m<=8?3:4}`;
+}
+function recordsInSelectedQuarter(){
+  const qKey = quarterOf(asOfDate).key;
+  return state.records.filter(x=>quarterKeyOf(x.lwd)===qKey);
+}
+function fnfDueState(rec){
+  if(recStatus(rec)==='closed') return null;
+  const src = rec.fnfDue && rec.fnfDue.pendingFrom;
+  if(!src || src==='none') return null;
+  return src; // 'kite' | 'hr'
+}
+function fnfDoneState(rec){
+  if(!(rec.closure.expLetter && rec.closure.slips)) return null;
+  if(!rec.lwd || !rec.emailSentDate) return null;
+  const gapHours = daysBetween(rec.lwd, rec.emailSentDate) * 24;
+  return gapHours <= 48 ? 'within48' : 'after48';
+}
 function totals(){
-  const r = state.records;
+  const r = recordsInSelectedQuarter();
   return {
     exits: r.length,
-    active: r.filter(x=>recStatus(x)==='active').length,
-    closed: r.filter(x=>recStatus(x)==='closed').length,
-    pending: r.filter(x=>recStatus(x)==='pending').length,
-    slaWithin: r.filter(x=>recSla(x).state==='within').length,
-    slaBreached: r.filter(x=>recSla(x).state==='breached').length,
+    dueKite: r.filter(x=>fnfDueState(x)==='kite').length,
+    dueHr: r.filter(x=>fnfDueState(x)==='hr').length,
+    doneWithin48: r.filter(x=>fnfDoneState(x)==='within48').length,
+    doneAfter48: r.filter(x=>fnfDoneState(x)==='after48').length,
   };
 }
 function fmt(n){
@@ -363,6 +442,20 @@ function field(labelHtml, inner){ return `<div class="field">${labelHtml}${inner
 let asOfDate = new Date().toISOString().slice(0,10);
 let view = "overview";
 let listFilter = "all";
+let listSortDir = "asc";
+let exitListData = null; // { fromDate, toDate, count, employees } | { error: true } | null (not loaded yet)
+async function loadExitList(){
+  if(exitListData) return; // loaded once per page session
+  try{
+    const r = await fetch('/api/pms/exit-list');
+    if(!r.ok) throw new Error('request failed');
+    exitListData = await r.json();
+  }catch(e){
+    console.error('Exit list load failed', e);
+    exitListData = { error:true };
+  }
+  render();
+}
 let activeIndex = 0;
 const state = { records: [] };
 
@@ -387,7 +480,7 @@ function setEmployeeSlaAck(i, val){ state.records[i].sla.ack = val; render(); }
 
 /* ---------------- navigation ---------------- */
 function setTab(v){ view=v; if(v==='detail' && state.records.length && activeIndex==null) activeIndex=0; render(); }
-function openList(filterKey){ view='list'; listFilter=filterKey; render(); }
+function openList(filterKey){ view='list'; listFilter=filterKey; render(); loadExitList(); }
 function openRecord(i){ activeIndex=i; view='detail'; activeSection='sec-resignation'; visitedSections=new Set(['sec-resignation']); render(); window.scrollTo(0,0); }
 async function addRecord(){
   const rec = await apiCreate();
@@ -412,11 +505,106 @@ function jumpTo(id){
   if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
 }
 
-function sendEmail(){
-  const rec = state.records[activeIndex];
-  rec.ack.shared = true;
-  if(!rec.emailSentDate) rec.emailSentDate = asOfDate;
+function computeGratuity(grossSalary, tenureYears){
+  const gross = Number(grossSalary||0);
+  const years = Number(tenureYears||0);
+  return years>5 ? Math.round((0.5*gross*15*years)/26) : 0;
+}
+function computeNoticePay(grossSalary, workingDays, presentDays){
+  const gross = Number(grossSalary||0);
+  return workingDays>0 ? Math.round((gross/workingDays)*presentDays) : 0;
+}
+function applySalaryAndPfSplit(rec){
+  const s = computeSalarySplit(rec.comp.grossSalary, rec.dor, rec.lwd, rec.comp.workingDays, rec.comp.presentDays);
+  rec.settlement.earnings.salaryCurrentMonth = s.salaryCurrentMonth;
+  rec.settlement.earnings.salaryPreviousMonth = s.salaryPreviousMonth;
+  const p = computeSalarySplit(rec.comp.epf, rec.dor, rec.lwd, rec.comp.workingDays, rec.comp.presentDays);
+  rec.settlement.deductions.pfCurrentMonth = p.salaryCurrentMonth;
+  rec.settlement.deductions.pfPreviousMonth = p.salaryPreviousMonth;
+  rec.settlement.earnings.gratuity = computeGratuity(rec.comp.grossSalary, rec.comp.tenureYears);
+  if(rec.dues.noticePay.applicable){
+    const noticePay = computeNoticePay(rec.comp.grossSalary, rec.comp.workingDays, rec.comp.presentDays);
+    rec.dues.noticePay.amount = noticePay;
+    rec.settlement.earnings.noticePeriodPay = noticePay;
+  }
+}
+function updateNoticePayApplicable(i, checked){
+  const rec = state.records[i];
+  rec.dues.noticePay.applicable = checked;
+  if(checked){
+    const noticePay = computeNoticePay(rec.comp.grossSalary, rec.comp.workingDays, rec.comp.presentDays);
+    rec.dues.noticePay.amount = noticePay;
+    rec.settlement.earnings.noticePeriodPay = noticePay;
+  } else {
+    rec.dues.noticePay.amount = 0;
+    rec.settlement.earnings.noticePeriodPay = 0;
+  }
   render();
+}
+function updateNoticePayAmount(i, value){
+  const rec = state.records[i];
+  rec.dues.noticePay.amount = value;
+  rec.settlement.earnings.noticePeriodPay = value;
+  render();
+}
+function updateLwd(i, value){
+  const rec = state.records[i];
+  rec.lwd = value;
+  const { workingDays, presentDays } = computeWorkingPresentDays(value);
+  rec.comp.workingDays = workingDays;
+  rec.comp.presentDays = presentDays;
+  applySalaryAndPfSplit(rec);
+  render();
+}
+function updateDor(i, value){
+  const rec = state.records[i];
+  rec.dor = value;
+  applySalaryAndPfSplit(rec);
+  render();
+}
+function updateGrossSalary(i, value){
+  const rec = state.records[i];
+  rec.comp.grossSalary = value;
+  applySalaryAndPfSplit(rec);
+  render();
+}
+function updateEpf(i, value){
+  const rec = state.records[i];
+  rec.comp.epf = value;
+  applySalaryAndPfSplit(rec);
+  render();
+}
+function updateTenureYears(i, value){
+  const rec = state.records[i];
+  rec.comp.tenureYears = value;
+  applySalaryAndPfSplit(rec);
+  render();
+}
+
+async function previewFnfSheet(i){
+  const rec = state.records[i];
+  const win = window.open('', '_blank'); // opened synchronously so popup blockers don't catch it
+  try{
+    await apiPatch(rec.id, { settlement: rec.settlement });
+    lastSynced[rec.id] = JSON.stringify(rec);
+  }catch(e){ /* preview still opens with last-synced data if this fails */ }
+  if(win) win.location.href = '/api/records/' + rec.id + '/preview';
+}
+async function sendApprovalEmail(i){
+  const rec = state.records[i];
+  if(!rec.personalEmail){ alert('Enter the employee\'s personal email first.'); return; }
+  try{
+    await apiPatch(rec.id, { personalEmail: rec.personalEmail, settlement: rec.settlement });
+    lastSynced[rec.id] = JSON.stringify(rec);
+    const r = await fetch('/api/records/' + rec.id + '/send-approval-email', { method:'POST' });
+    const body = await r.json();
+    if(!r.ok){ alert('Failed to send: ' + (body.error || r.status)); return; }
+    state.records[i] = body;
+    lastSynced[rec.id] = JSON.stringify(body);
+    render();
+  }catch(e){
+    alert('Failed to send approval email: ' + e.message);
+  }
 }
 
 /* ---------------- render: tabbar ---------------- */
@@ -430,67 +618,64 @@ function renderTabbar(){
 }
 
 /* ---------------- render: overview ---------------- */
-function kpiCard(key,label,value,tone,clickable=true){
+function kpiCard(key,label,value,tone,clickable=true,pct=null){
   return `<div class="kpi-card tone-${tone}" ${clickable?`onclick="openList('${key}')"`:''} style="${clickable?'':'cursor:default;'}">
-    <div class="kpi-value">${value}</div>
+    <div class="kpi-value">${value}${pct!=null?` <span style="font-size:16px;color:var(--ink-soft);font-weight:500;">(${pct}%)</span>`:''}</div>
     <div class="kpi-label">${label}</div>
   </div>`;
 }
 function renderOverview(){
   const t = totals();
-  const pmsValue = pmsSummary
-    ? (pmsSummary.error ? '—' : pmsSummary.servingNoticeCount)
-    : '…';
-  const pmsResignedValue = pmsSummary
-    ? (pmsSummary.error ? '—' : pmsSummary.resignedCount)
-    : '…';
+  const curQ = quarterOf(asOfDate);
+  const opts = quarterOptions();
   return `
   <div class="panel">
-    <div class="panel-head"><h2>FnF Overview</h2><span class="frtag">as of ${asOfDate}</span></div>
-    <div class="panel-sub">Click any card to see the matching employee list. Adjust "As of" to see how SLA status shifts with time.</div>
-    <div class="field" style="max-width:220px;margin-bottom:20px;">
-      <label>As-of Date</label>
-      <input type="date" value="${asOfDate}" oninput="asOfDate=this.value;loadPmsSummary();render()">
+    <div class="panel-head"><h2>FnF Overview</h2><span class="frtag">${curQ.label}</span></div>
+    <div class="panel-sub">Click any card to see the matching employee list. Adjust "As of Quarter" to see how status shifts across quarters. Data is live from PMS (Kites API).</div>
+    <div class="field" style="max-width:260px;margin-bottom:20px;">
+      <label>As of Quarter</label>
+      <select onchange="asOfDate=this.value;render()">
+        ${opts.map(q=>`<option value="${q.end}" ${q.key===curQ.key?'selected':''}>${q.label}</option>`).join('')}
+      </select>
     </div>
     <div class="kpi-grid">
-      ${kpiCard('exits','Total Exits', t.exits, 'navy')}
-      ${kpiCard('active','FnF Active', t.active, 'blue')}
-      ${kpiCard('pending','FnF Pending', t.pending, 'amber')}
-      ${kpiCard('closed','FnF Closed', t.closed, 'green')}
-      ${kpiCard('slaWithin','Email Sent Within 2 Days', t.slaWithin, 'green')}
-      ${kpiCard('slaBreached','Email Not Sent Within 2 Days', t.slaBreached, 'red')}
+      ${kpiCard('exits','Total Resignation', t.exits, 'navy')}
+      ${kpiCard('dueKite','FnF Due — Pending from Kite', t.dueKite, 'amber')}
+      ${kpiCard('dueHr','FnF Due — Pending from HR', t.dueHr, 'blue')}
+      ${kpiCard('doneWithin48','FnF Done — Within 48 Hours', t.doneWithin48, 'green', true, t.exits ? Math.round(t.doneWithin48/t.exits*100) : 0)}
+      ${kpiCard('doneAfter48','FnF Done — After 48 Hours', t.doneAfter48, 'red', true, t.exits ? Math.round(t.doneAfter48/t.exits*100) : 0)}
     </div>
-    <hr class="divider">
-    <div class="panel-sub" style="margin-top:0;">Live from PMS (Kites API) — employees with a recorded resignation date.</div>
-    <div class="kpi-grid">
-      ${kpiCard('pmsResigned','Resigned (PMS)', pmsResignedValue, 'navy', false)}
-      ${kpiCard('pmsNotice','Serving Notice Period (PMS)', pmsValue, 'amber', false)}
-    </div>
-    ${pmsSummary && pmsSummary.error ? `<div class="callout danger" style="margin-top:14px;">Could not reach PMS API — showing last known / placeholder values.</div>` : ''}
   </div>`;
 }
 
 /* ---------------- render: list ---------------- */
-const filterTitles = { all:'All Employees', exits:'All Employees (Total Exits)', active:'FnF Active', pending:'FnF Pending', closed:'FnF Closed', slaWithin:'Email Sent Within 2 Days', slaBreached:'Email Not Sent Within 2 Days' };
+const filterTitles = { all:'All Employees', exits:'All Employees (Total Resignation)', dueKite:'FnF Due — Pending from Kite', dueHr:'FnF Due — Pending from HR', doneWithin48:'FnF Done — Within 48 Hours', doneAfter48:'FnF Done — After 48 Hours' };
 function filteredRecords(){
-  const r = state.records;
+  // 'all' is the general employee directory (top tab) — not quarter-scoped.
+  // Every other filter comes from a KPI card, so it respects the selected quarter.
+  const r = listFilter==='all' ? state.records : recordsInSelectedQuarter();
   switch(listFilter){
-    case 'active': return r.filter(x=>recStatus(x)==='active');
-    case 'closed': return r.filter(x=>recStatus(x)==='closed');
-    case 'pending': return r.filter(x=>recStatus(x)==='pending');
-    case 'slaWithin': return r.filter(x=>recSla(x).state==='within');
-    case 'slaBreached': return r.filter(x=>recSla(x).state==='breached');
+    case 'dueKite': return r.filter(x=>fnfDueState(x)==='kite');
+    case 'dueHr': return r.filter(x=>fnfDueState(x)==='hr');
+    case 'doneWithin48': return r.filter(x=>fnfDoneState(x)==='within48');
+    case 'doneAfter48': return r.filter(x=>fnfDoneState(x)==='after48');
     default: return r;
   }
 }
+function toggleLwdSort(){ listSortDir = listSortDir==='asc' ? 'desc' : 'asc'; render(); }
 function renderList(){
-  const rows = filteredRecords();
+  const rows = filteredRecords().slice().sort((a,b)=>{
+    if(!a.lwd && !b.lwd) return 0;
+    if(!a.lwd) return 1;
+    if(!b.lwd) return -1;
+    return listSortDir==='asc' ? a.lwd.localeCompare(b.lwd) : b.lwd.localeCompare(a.lwd);
+  });
   return `
   <div class="panel">
-    <div class="panel-head"><h2>${filterTitles[listFilter]||'Employees'}</h2><span class="frtag">${rows.length} record(s)</span></div>
-    <div class="panel-sub">Summary view only — open a name to see the full consolidated record.</div>
+    <div class="panel-head"><h2>${filterTitles[listFilter]||'Employees'}</h2><span class="frtag">${listFilter!=='all' ? quarterOf(asOfDate).label + ' · ' : ''}${rows.length} record(s)</span></div>
+    <div class="panel-sub">${listFilter!=='all' ? `Filtered to ${quarterOf(asOfDate).label} (by LWD). ` : ''}Summary view only — open a name to see the full consolidated record.</div>
     <table class="ledger queue-table">
-      <tr><th>EmpId</th><th>Name</th><th>Department</th><th>LWD</th><th>Status</th><th>SLA</th><th></th></tr>
+      <tr><th>EmpCode</th><th>Name</th><th>Department</th><th>Location</th><th style="cursor:pointer;user-select:none;" onclick="toggleLwdSort()">LWD ${listSortDir==='asc'?'↑':'↓'}</th><th>Status</th><th>SLA</th><th></th></tr>
       ${rows.map((rec)=>{
         const i = state.records.indexOf(rec);
         const st = recStatus(rec);
@@ -498,7 +683,7 @@ function renderList(){
         return `<tr>
           <td>${rec.empId||'—'}</td>
           <td><a href="javascript:void(0)" onclick="openRecord(${i})" style="color:var(--navy);font-weight:600;text-decoration:none;">${rec.name||'(unnamed)'}</a></td>
-          <td>${rec.department||'—'}</td><td>${rec.lwd||'—'}</td>
+          <td>${rec.department||'—'}</td><td>${rec.location||'—'}</td><td>${rec.lwd||'—'}</td>
           <td><span class="badge status-${st}">${st.toUpperCase()}</span></td>
           <td><span class="badge sla-${sla.state}">${sla.label}</span></td>
           <td><button class="btn gold" style="padding:6px 12px;font-size:11px;" onclick="openRecord(${i})">Open →</button></td>
@@ -509,6 +694,29 @@ function renderList(){
       <button class="btn secondary" onclick="setTab('overview')">← Back to Overview</button>
       <button class="btn secondary" onclick="addRecord()">+ Add Employee</button>
     </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Exit Employee List (PMS)</h2><span class="frtag">${exitListData && !exitListData.error ? exitListData.fromDate + ' → ' + exitListData.toDate : ''}</span></div>
+    <div class="panel-sub">Live from PMS "Exit Employee List" API — separate from the records above, shown as-is for reference.</div>
+    ${!exitListData ? `<div class="callout">Loading…</div>` : exitListData.error ? `<div class="callout danger">Could not reach the PMS Exit Employee List API.</div>` : `
+    <table class="ledger queue-table">
+      <tr><th>EmpCode</th><th>Name</th><th>Department</th><th>LWD</th><th>Base Location</th><th>Status</th></tr>
+      ${exitListData.employees.map(e=>{
+        const today = new Date().toISOString().slice(0,10);
+        const st = !e.lwd ? null : (e.lwd >= today ? 'active' : 'exited');
+        return `<tr>
+        <td>${e.empCode??'—'}</td>
+        <td>${e.name||'—'}</td>
+        <td>${e.department||'—'}</td>
+        <td>${e.lwd||'—'}</td>
+        <td>${e.baseLocation||'—'}</td>
+        <td>${st ? `<span class="badge status-${st==='active'?'active':'closed'}">${st.toUpperCase()}</span>` : '—'}</td>
+      </tr>`;
+      }).join('')}
+    </table>
+    <div class="panel-sub" style="margin-top:10px;margin-bottom:0;">${exitListData.count} record(s)</div>
+    `}
   </div>`;
 }
 
@@ -520,14 +728,10 @@ function renderDetail(){
   if(activeIndex==null || activeIndex>=state.records.length) activeIndex = 0;
   const rec = state.records[activeIndex];
   const r = calc(rec);
-  const isPay = r.net >= 0;
+  const settlementTotals = settlementCalc(rec);
+  const isPay = settlementTotals.netPayable >= 0;
   const st = recStatus(rec);
   const sla = recSla(rec);
-  const tdsGross = Number(rec.comp.grossSalary||0);
-  const tdsBasic = tdsGross * 0.5;
-  const tdsHra = tdsBasic * 0.5;
-  const tdsOther = tdsGross - tdsBasic - tdsHra;
-  const allChecklistDone = rec.checklist.every(x=>x.done);
 
   return `
   <div class="panel">
@@ -536,7 +740,7 @@ function renderDetail(){
       <select onchange="activeIndex=parseInt(this.value);activeSection='sec-resignation';visitedSections=new Set(['sec-resignation']);render();window.scrollTo(0,0)">
         ${state.records.map((x,i)=>`<option value="${i}" ${i===activeIndex?'selected':''}>${x.name||'(unnamed)'} — ${x.empId||'no id'}</option>`).join('')}
       </select>
-      <button class="btn secondary" style="padding:8px 14px;font-size:11px;" onclick="addRecord()">+ Add Employee</button>
+      <button class="btn secondary" style="padding:8px 14px;font-size:11px;" onclick="refreshRecords()">↻ Refresh</button>
       <button class="btn secondary" style="padding:8px 14px;font-size:11px;" onclick="removeRecord(${activeIndex})">Remove This Record</button>
     </div>
 
@@ -553,8 +757,7 @@ function renderDetail(){
 
     <div class="gist-row">
       <div class="gist-card"><div class="g-label">LWD</div><div class="g-value" style="font-size:15px;">${rec.lwd||'—'}</div></div>
-      <div class="gist-card"><div class="g-label">${isPay?'Net Payable':'Net Recoverable'}</div><div class="g-value">${fmt(Math.abs(r.net))}</div></div>
-      <div class="gist-card"><div class="g-label">Checklist</div><div class="g-value" style="font-size:15px;">${rec.checklist.filter(x=>x.done).length}/${rec.checklist.length} done</div></div>
+      <div class="gist-card"><div class="g-label">${isPay?'Net Payable':'Net Recoverable'}</div><div class="g-value">${fmt(Math.abs(settlementTotals.netPayable))}</div></div>
       <div class="gist-card"><div class="g-label">Email Status</div><div class="g-value" style="font-size:15px;">${rec.emailSentDate? 'Sent '+rec.emailSentDate : 'Not sent'}</div></div>
       <div class="gist-card"><div class="g-label">Acknowledged</div><div class="g-value" style="font-size:15px;">${rec.ack.acknowledged?'Yes':'No'}</div></div>
     </div>
@@ -579,23 +782,11 @@ function renderDetail(){
         ${field(`<label>Department</label>`, `<input type="text" value="${rec.department}" oninput="state.records[${activeIndex}].department=this.value">`)}
         ${field(`<label>Designation</label>`, `<input type="text" value="${rec.designation}" oninput="state.records[${activeIndex}].designation=this.value">`)}
         ${field(`<label>Reporting Manager</label>`, `<input type="text" value="${rec.manager}" oninput="state.records[${activeIndex}].manager=this.value">`)}
-        ${field(`<label>Resignation Date (DOR)</label>`, `<input type="date" value="${rec.dor}" oninput="state.records[${activeIndex}].dor=this.value">`)}
+        ${field(`<label>Resignation Date (DOR)</label>`, `<input type="date" value="${rec.dor}" oninput="updateDor(${activeIndex},this.value)">`)}
       </div>
-      <div class="toggle-row" style="margin-top:14px;">
-        <div class="t-label">Reporting Manager has accepted resignation <small>FR-1.1</small></div>
-        <label class="switch"><input type="checkbox" ${rec.managerApproved?'checked':''} onchange="state.records[${activeIndex}].managerApproved=this.checked;render()"><span class="slider"></span></label>
-      </div>
-      <div class="toggle-row">
-        <div class="t-label">HR has updated resignation status in PMS <small>FR-1.2</small></div>
-        <label class="switch"><input type="checkbox" ${rec.pmsUpdated?'checked':''} onchange="state.records[${activeIndex}].pmsUpdated=this.checked;render()"><span class="slider"></span></label>
-      </div>
-      <ul class="checklist" style="margin-top:14px;">
-        ${rec.checklist.map((it,i)=>`<li><input type="checkbox" ${it.done?'checked':''} onchange="state.records[${activeIndex}].checklist[${i}].done=this.checked;render()"> ${it.label}</li>`).join('')}
-      </ul>
       <div class="field-grid" style="margin-top:14px;">
-        ${field(`<label>Last Working Day (LWD) <span class="fr">FR-1.4</span></label>`, `<input type="date" value="${rec.lwd}" ${!allChecklistDone?'disabled':''} oninput="state.records[${activeIndex}].lwd=this.value;render()">`)}
+        ${field(`<label>Last Working Day (LWD) <span class="fr">FR-1.4</span></label>`, `<input type="date" value="${rec.lwd}" oninput="updateLwd(${activeIndex},this.value)">`)}
       </div>
-      ${!allChecklistDone ? `<div class="callout danger">Checklist incomplete — LWD cannot be finalized until all items are cleared.</div>` : ''}
     </div>
 
     <hr class="divider">
@@ -621,15 +812,23 @@ function renderDetail(){
           <h4>Loan &amp; Advance <span class="badge flag">FR-3.9</span></h4>
           ${field(`<label>Outstanding recovery</label>`, `<input type="number" value="${rec.dues.loanAdvance.amount}" oninput="state.records[${activeIndex}].dues.loanAdvance.amount=this.value;render()">`)}
         </div>
+        <div class="dues-card">
+          <h4>FnF Due Status</h4>
+          ${field(`<label>Pending From</label>`, `<select onchange="state.records[${activeIndex}].fnfDue.pendingFrom=this.value;render()">
+            <option value="none" ${(!rec.fnfDue||rec.fnfDue.pendingFrom==='none')?'selected':''}>Not Pending</option>
+            <option value="kite" ${rec.fnfDue&&rec.fnfDue.pendingFrom==='kite'?'selected':''}>Pending from Kite</option>
+            <option value="hr" ${rec.fnfDue&&rec.fnfDue.pendingFrom==='hr'?'selected':''}>Pending from HR</option>
+          </select>`)}
+        </div>
         <div class="dues-card" style="grid-column:1/-1;">
           <h4>Notice Pay — HR sub-department <span class="badge flag">FR-3.5</span></h4>
           <div class="toggle-row" style="margin-bottom:12px;">
             <div class="t-label">Notice Period Pay applicable</div>
-            <label class="switch"><input type="checkbox" ${rec.dues.noticePay.applicable?'checked':''} onchange="state.records[${activeIndex}].dues.noticePay.applicable=this.checked;render()"><span class="slider"></span></label>
+            <label class="switch"><input type="checkbox" ${rec.dues.noticePay.applicable?'checked':''} onchange="updateNoticePayApplicable(${activeIndex},this.checked)"><span class="slider"></span></label>
           </div>
           <div class="field-grid">
             ${field(`<label>Date recorded in No Dues Panel</label>`, `<input type="date" value="${rec.dues.noticePay.date}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="state.records[${activeIndex}].dues.noticePay.date=this.value">`)}
-            ${field(`<label>Notice Pay amount <span class="fr">PF excluded</span></label>`, `<input type="number" value="${rec.dues.noticePay.amount}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="state.records[${activeIndex}].dues.noticePay.amount=this.value;render()">`)}
+            ${field(`<label>Notice Pay amount <span class="fr">Gross ÷ Working Days × Present Days, PF excluded</span></label>`, `<input type="number" value="${rec.dues.noticePay.amount}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="updateNoticePayAmount(${activeIndex},this.value)">`)}
           </div>
         </div>
       </div>
@@ -641,11 +840,11 @@ function renderDetail(){
       <div class="section-title"><span class="num">3</span>Compensation &amp; Deduction Calculation <span class="frtag" style="margin-left:auto;">FR-3.1 – FR-3.11</span></div>
       <div class="panel-sub" style="margin-top:-4px;">Formulas per §8 Business Rules. Deductions above are carried in automatically.</div>
       <div class="field-grid">
-        ${field(`<label>Gross Salary (₹)</label>`, `<input type="number" value="${rec.comp.grossSalary}" oninput="state.records[${activeIndex}].comp.grossSalary=this.value;render()">`)}
-        ${field(`<label>EPF# (Employer PF base, ₹)</label>`, `<input type="number" value="${rec.comp.epf}" oninput="state.records[${activeIndex}].comp.epf=this.value;render()">`)}
+        ${field(`<label>Gross Salary (₹)</label>`, `<input type="number" value="${rec.comp.grossSalary}" oninput="updateGrossSalary(${activeIndex},this.value)">`)}
+        ${field(`<label>EPF# (Employer PF base, ₹)</label>`, `<input type="number" value="${rec.comp.epf}" oninput="updateEpf(${activeIndex},this.value)">`)}
         ${field(`<label>Working Days <span class="fr">FR-3.1</span></label>`, `<input type="number" value="${rec.comp.workingDays}" oninput="state.records[${activeIndex}].comp.workingDays=this.value;render()">`)}
         ${field(`<label>Present Days</label>`, `<input type="number" value="${rec.comp.presentDays}" oninput="state.records[${activeIndex}].comp.presentDays=this.value;render()">`)}
-        ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="number" step="0.1" value="${rec.comp.tenureYears}" oninput="state.records[${activeIndex}].comp.tenureYears=this.value;render()">`)}
+        ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="number" step="0.1" value="${rec.comp.tenureYears}" oninput="updateTenureYears(${activeIndex},this.value)">`)}
         ${field(`<label>TA Bill reconciliation (₹) <span class="fr">+owed / −recover</span></label>`, `<input type="number" value="${rec.comp.taBill}" oninput="state.records[${activeIndex}].comp.taBill=this.value;render()">`)}
         ${field(`<label>NPS entry (₹)</label>`, `<input type="number" value="${rec.comp.nps}" oninput="state.records[${activeIndex}].comp.nps=this.value;render()">`)}
         ${field(`<label>VPF entry (₹)</label>`, `<input type="number" value="${rec.comp.vpf}" oninput="state.records[${activeIndex}].comp.vpf=this.value;render()">`)}
@@ -673,11 +872,12 @@ function renderDetail(){
 
       <table class="ledger">
         <tr><th>Salary Component</th><th class="num">Amount</th></tr>
-        <tr><td>Gross Salary</td><td class="num">${fmt(tdsGross)}</td></tr>
-        <tr><td>Basic (50% of Gross)</td><td class="num">${fmt(tdsBasic)}</td></tr>
-        <tr><td>HRA (50% of Basic)</td><td class="num">${fmt(tdsHra)}</td></tr>
-        <tr><td>Other Allowances (Gross − Basic − HRA)</td><td class="num">${fmt(tdsOther)}</td></tr>
-        <tr class="subtotal"><td>Estimated TDS (placeholder — Open Item 1)</td><td class="num">${fmt(r.tds)}</td></tr>
+        <tr><td>Gross Salary</td><td class="num">${fmt(0)}</td></tr>
+        <tr><td>Basic (50% of Gross)</td><td class="num">${fmt(0)}</td></tr>
+        <tr><td>HRA (50% of Basic)</td><td class="num">${fmt(0)}</td></tr>
+        <tr><td>Other Allowances (Gross − Basic − HRA)</td><td class="num">${fmt(0)}</td></tr>
+        <tr class="subtotal"><td>Previous Month TDS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.tds) || 0)}</td></tr>
+        <tr class="subtotal"><td>Previous Month NPS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.nps) || 0)}</td></tr>
       </table>
 
       <hr class="divider">
@@ -724,37 +924,61 @@ function renderDetail(){
 
     <div class="section" id="sec-sheet">
       <div class="section-title"><span class="num">5</span>FnF Settlement Sheet — Review &amp; Send <span class="frtag" style="margin-left:auto;">FR-4.1 – FR-4.3</span></div>
+      ${(()=>{
+        const months = settlementMonthLabels(rec.lwd);
+        const st = settlementCalc(rec);
+        const e = rec.settlement.earnings, d = rec.settlement.deductions;
+        const isPaySheet = st.netPayable >= 0;
+        const amtInput = (group, key) => `<input type="number" value="${(group==='earnings'?e:d)[key]}" oninput="state.records[${activeIndex}].settlement.${group}.${key}=this.value;render()" style="width:100%;max-width:140px;text-align:right;font-family:'IBM Plex Mono',monospace;padding:4px 6px;border:1px solid #bfd9f2;border-radius:4px;background:#f7fbff;">`;
+        return `
+      <div class="field-grid" style="margin-bottom:14px;">
+        ${field(`<label>Date of Joining (DOJ)</label>`, `<input type="date" value="${rec.settlement.doj||''}" oninput="state.records[${activeIndex}].settlement.doj=this.value">`)}
+      </div>
       <table class="ledger">
         <tr><th>Earnings</th><th class="num">₹</th></tr>
-        <tr><td>Salary (pro-rated)</td><td class="num">${fmt(r.salary)}</td></tr>
-        <tr><td>PF</td><td class="num">${fmt(r.pf)}</td></tr>
-        <tr><td>Gratuity</td><td class="num">${fmt(r.gratuity)}</td></tr>
-        <tr><td>Notice Pay</td><td class="num">${fmt(r.noticePay)}</td></tr>
-        <tr><td>TA Bill (if owed)</td><td class="num">${fmt(r.taBill>0?r.taBill:0)}</td></tr>
-        <tr class="credit"><td>Incentive / PLI <span class="badge flag" style="margin-left:6px;">unconfirmed</span></td><td class="num">${fmt(r.pli)}</td></tr>
-        <tr class="subtotal"><td>Total Earnings</td><td class="num">${fmt(r.earnings)}</td></tr>
+        <tr><td>Salary (${months.current})</td><td class="num">${amtInput('earnings','salaryCurrentMonth')}</td></tr>
+        <tr><td>Salary (${months.previous})</td><td class="num">${amtInput('earnings','salaryPreviousMonth')}</td></tr>
+        <tr><td>Incentives</td><td class="num">${amtInput('earnings','incentives')}</td></tr>
+        <tr><td>TA Bill (if positive)</td><td class="num">${amtInput('earnings','taBillPositive')}</td></tr>
+        <tr><td>Gratuity</td><td class="num">${amtInput('earnings','gratuity')}</td></tr>
+        <tr><td>Any other Reimbursement</td><td class="num">${amtInput('earnings','otherReimbursement')}</td></tr>
+        <tr><td>Notice Period Pay</td><td class="num">${amtInput('earnings','noticePeriodPay')}</td></tr>
+        <tr class="subtotal"><td>Total Earnings</td><td class="num">${fmt(st.earningsTotal)}</td></tr>
       </table>
       <table class="ledger" style="margin-top:18px;">
         <tr><th>Deductions</th><th class="num">₹</th></tr>
-        <tr class="deduct"><td>Exam Dues</td><td class="num">${fmt(r.examDeduct)}</td></tr>
-        <tr class="deduct"><td>WFH Dues</td><td class="num">${fmt(r.wfhDeduct)}</td></tr>
-        <tr class="deduct"><td>Loan &amp; Advance Recovery</td><td class="num">${fmt(r.loanAdv)}</td></tr>
-        <tr class="deduct"><td>NPS entry</td><td class="num">${fmt(r.nps)}</td></tr>
-        <tr class="deduct"><td>VPF entry</td><td class="num">${fmt(r.vpf)}</td></tr>
-        <tr class="deduct"><td>TA Bill (if recoverable)</td><td class="num">${fmt(r.taBill<0?Math.abs(r.taBill):0)}</td></tr>
-        <tr class="deduct"><td>TDS <span class="badge flag" style="margin-left:6px;">unconfirmed</span></td><td class="num">${fmt(r.tds)}</td></tr>
-        <tr class="subtotal"><td>Total Deductions</td><td class="num">${fmt(r.deductions)}</td></tr>
+        <tr class="deduct"><td>PF (${months.current})</td><td class="num">${amtInput('deductions','pfCurrentMonth')}</td></tr>
+        <tr class="deduct"><td>PF (${months.previous})</td><td class="num">${amtInput('deductions','pfPreviousMonth')}</td></tr>
+        <tr class="deduct"><td>Exam Dues</td><td class="num">${amtInput('deductions','examDues')}</td></tr>
+        <tr class="deduct"><td>WFH Dues</td><td class="num">${amtInput('deductions','wfhDues')}</td></tr>
+        <tr class="deduct"><td>NPS</td><td class="num">${amtInput('deductions','nps')}</td></tr>
+        <tr class="deduct"><td>VPF</td><td class="num">${amtInput('deductions','vpf')}</td></tr>
+        <tr class="deduct"><td>TA Bill (if negative after settlement)</td><td class="num">${amtInput('deductions','taBillNegative')}</td></tr>
+        <tr class="deduct"><td>Loan &amp; Advances</td><td class="num">${amtInput('deductions','loanAdvances')}</td></tr>
+        <tr class="deduct"><td>Personal rides deduction</td><td class="num">${amtInput('deductions','personalRides')}</td></tr>
+        <tr class="deduct"><td>Any other deductions (Pluxee Meal)</td><td class="num">${amtInput('deductions','pluxeeMeal')}</td></tr>
+        <tr class="deduct"><td>ESI</td><td class="num">${amtInput('deductions','esi')}</td></tr>
+        <tr class="deduct"><td>TDS</td><td class="num">${amtInput('deductions','tds')}</td></tr>
+        <tr class="deduct"><td>PT</td><td class="num">${amtInput('deductions','pt')}</td></tr>
+        <tr class="subtotal"><td>Total Deductions</td><td class="num">${fmt(st.deductionsTotal)}</td></tr>
       </table>
       <table class="ledger">
-        <tr class="net ${isPay?'pay':'recover'}"><td>${isPay? 'Net Payable to Employee' : 'Net Recoverable from Employee'} <span class="fr" style="font-family:'IBM Plex Mono',monospace;font-size:11px;">FR-4.3</span></td><td class="num">${fmt(Math.abs(r.net))}</td></tr>
-      </table>
+        <tr class="net ${isPaySheet?'pay':'recover'}"><td>${isPaySheet? 'Net Payable to Employee' : 'Net Recoverable from Employee'} <span class="fr" style="font-family:'IBM Plex Mono',monospace;font-size:11px;">FR-4.3</span></td><td class="num">${fmt(Math.abs(st.netPayable))}</td></tr>
+      </table>`;
+      })()}
 
-      ${rec.emailSentDate ? `<div class="callout success" style="margin-top:18px;"><b>Email sent</b> to ${rec.contact||'employee'} on ${rec.emailSentDate}. LWD → email gap: ${daysBetween(rec.lwd, rec.emailSentDate)} day(s).</div>` : `<div class="callout" style="margin-top:18px;">Not yet sent to the employee. Target: within 2 days of LWD (${rec.lwd||'LWD not set'}).</div>`}
+      ${rec.emailSentDate ? `<div class="callout success" style="margin-top:18px;"><b>Email sent</b> to ${rec.personalEmail||rec.contact||'employee'} on ${rec.emailSentDate}. LWD → email gap: ${daysBetween(rec.lwd, rec.emailSentDate)} day(s).</div>` : `<div class="callout" style="margin-top:18px;">Not yet sent to the employee. Target: within 2 days of LWD (${rec.lwd||'LWD not set'}).</div>`}
 
-      <div class="actions">
-        <button class="btn secondary" onclick="window.print()">Print / Export Sheet</button>
-        <button class="btn gold" onclick="sendEmail()">${rec.emailSentDate? 'Re-send Email to Employee' : 'Send Email to Employee →'}</button>
+      <div class="field-grid" style="margin-top:14px;">
+        ${field(`<label>Employee's Personal Email <span class="fr">required to send</span></label>`, `<input type="text" value="${rec.personalEmail||''}" placeholder="name@personal-provider.com" oninput="state.records[${activeIndex}].personalEmail=this.value" onblur="render()">`)}
       </div>
+
+      <div class="actions" style="margin-top:14px;">
+        <button class="btn secondary" onclick="window.print()">Print / Export Sheet</button>
+        <button class="btn secondary" onclick="previewFnfSheet(${activeIndex})">Review →</button>
+        <button class="btn gold" ${!rec.personalEmail?'disabled':''} onclick="sendApprovalEmail(${activeIndex})">${rec.emailSentDate? 'Re-send Email to Employee' : 'Send Email to Employee →'}</button>
+      </div>
+      ${rec.sheetApproval.status==='rejected' && rec.sheetApproval.rejectionReason ? `<div class="callout danger" style="margin-top:14px;"><b>Rejection reason:</b> ${rec.sheetApproval.rejectionReason}</div>` : ''}
 
       <div class="toggle-row" style="margin-top:18px;">
         <div class="t-label">Employee has reviewed &amp; acknowledged the sheet <small>Success Criterion §12</small></div>
@@ -807,6 +1031,49 @@ function render(){
   scheduleSync();
 }
 
+async function refreshRecords(){
+  const activeId = state.records[activeIndex] ? state.records[activeIndex].id : null;
+  try{
+    state.records = await apiList();
+    state.records.forEach(r => { lastSynced[r.id] = JSON.stringify(r); });
+    if(activeId != null){
+      const idx = state.records.findIndex(r => r.id === activeId);
+      if(idx >= 0) activeIndex = idx;
+    }
+    setSyncStatus('Synced');
+  }catch(e){
+    alert('Failed to refresh: ' + e.message);
+  }
+  render();
+}
+
+// Polls the currently-viewed record so an employee's Approve/Reject click
+// (which happens outside this browser tab, via the email link) shows up here
+// without HR needing to click Refresh or reload.
+async function pollActiveRecord(){
+  if(view!=='detail') return;
+  const rec = state.records[activeIndex];
+  if(!rec) return;
+  try{
+    const r = await fetch('/api/records/' + rec.id);
+    if(!r.ok) return;
+    const fresh = await r.json();
+    // Only merge the fields an employee's (or Bhargavi's) response can change —
+    // leaves any in-progress HR edits (settlement figures, etc.) alone.
+    const changed = JSON.stringify(fresh.ack) !== JSON.stringify(rec.ack)
+      || JSON.stringify(fresh.sheetApproval) !== JSON.stringify(rec.sheetApproval)
+      || JSON.stringify(fresh.payment) !== JSON.stringify(rec.payment);
+    if(changed){
+      rec.ack = fresh.ack;
+      rec.sheetApproval = fresh.sheetApproval;
+      rec.payment = fresh.payment;
+      lastSynced[rec.id] = JSON.stringify(rec);
+      render();
+    }
+  }catch(e){ /* silent — next tick retries */ }
+}
+setInterval(pollActiveRecord, 5000);
+
 /* ---------------- boot ---------------- */
 (async function init(){
   try {
@@ -818,7 +1085,6 @@ function render(){
     setSyncStatus('Load failed — see console');
   }
   render();
-  loadPmsSummary();
 })();
 </script>
 </body>

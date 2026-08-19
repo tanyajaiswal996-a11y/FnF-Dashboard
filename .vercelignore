@@ -1,0 +1,6 @@
+.env
+.env*
+.vercel
+node_modules/
+FnF Dashboard/
+FnF_Settlement_Prototype.html
