@@ -105,8 +105,6 @@ function settlementSheetHtml(rec) {
     settlementRow('NPS', d.nps),
     settlementRow('VPF', d.vpf),
     settlementRow('TA Bill (If figure is negative after settlements)', d.taBillNegative),
-    settlementRow('Loan & Advances', d.loanAdvances),
-    settlementRow('Personal rides deduction', d.personalRides),
     settlementRow('Any other deductions (Pluxee Meal)', d.pluxeeMeal),
     settlementRow('ESI', d.esi),
     settlementRow('TDS', d.tds),

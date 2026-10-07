@@ -334,7 +334,7 @@ function settlementCalc(rec){
   const d = (rec.settlement && rec.settlement.deductions) || {};
   const n = v => Number(v||0);
   const earningsTotal = n(e.salaryCurrentMonth)+n(e.salaryPreviousMonth)+n(e.incentives)+n(e.taBillPositive)+n(e.gratuity)+n(e.otherReimbursement)+n(e.noticePeriodPay);
-  const deductionsTotal = n(d.pfCurrentMonth)+n(d.pfPreviousMonth)+n(d.examDues)+n(d.wfhDues)+n(d.nps)+n(d.vpf)+n(d.taBillNegative)+n(d.loanAdvances)+n(d.personalRides)+n(d.pluxeeMeal)+n(d.esi)+n(d.tds)+n(d.pt);
+  const deductionsTotal = n(d.pfCurrentMonth)+n(d.pfPreviousMonth)+n(d.examDues)+n(d.wfhDues)+n(d.nps)+n(d.vpf)+n(d.taBillNegative)+n(d.pluxeeMeal)+n(d.esi)+n(d.tds)+n(d.pt);
   return { earningsTotal, deductionsTotal, netPayable: earningsTotal - deductionsTotal };
 }
 const MANDATORY_HOLIDAYS = [[0,1],[0,26],[7,15],[9,2]]; // [month(0-idx), day]
@@ -1271,8 +1271,6 @@ function renderDetail(){
         <tr class="deduct"><td>NPS</td><td class="num">${amtInput('deductions','nps')}</td></tr>
         <tr class="deduct"><td>VPF</td><td class="num">${amtInput('deductions','vpf')}</td></tr>
         <tr class="deduct"><td>TA Bill (if negative after settlement)</td><td class="num">${amtInput('deductions','taBillNegative')}</td></tr>
-        <tr class="deduct"><td>Loan &amp; Advances</td><td class="num">${amtInput('deductions','loanAdvances')}</td></tr>
-        <tr class="deduct"><td>Personal rides deduction</td><td class="num">${amtInput('deductions','personalRides')}</td></tr>
         <tr class="deduct"><td>Any other deductions (Pluxee Meal)</td><td class="num">${amtInput('deductions','pluxeeMeal')}</td></tr>
         <tr class="deduct"><td>ESI</td><td class="num">${amtInput('deductions','esi')}</td></tr>
         <tr class="deduct"><td>TDS${rec.tdsReply && rec.tdsReply.status==='applied' ? ' <span class="fr">per Accounts reply</span>' : (rec.tdsReply && rec.tdsReply.status==='awaiting' ? ' <span class="fr">awaiting Accounts reply</span>' : '')}</td><td class="num">${amtInput('deductions','tds')}</td></tr>
