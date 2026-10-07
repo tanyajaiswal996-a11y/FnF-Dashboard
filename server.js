@@ -10,9 +10,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 const store = require('./lib/store');
-const { calc, recStatus, recSla, settlementCalc, settlementMonthLabels } = require('./lib/calc');
+const { calc, recStatus, recSla, settlementCalc, settlementMonthLabels, computeTdsCalc, isSalesEmployee, pliShareWindow } = require('./lib/calc');
 const pms = require('./lib/pms');
 const outlook = require('./lib/outlook');
+const { parseTdsReply } = require('./lib/tds-reply');
 
 const SENDER_UPN = process.env.OUTLOOK_SENDER_UPN;
 const PAYMENT_CONTACT_UPN = process.env.OUTLOOK_PAYMENT_CONTACT_UPN;
@@ -176,14 +177,186 @@ function reviewPageHtml(rec) {
   </body></html>`;
 }
 
-// HR-facing preview — same sheet the employee will see, no Approve/Reject actions.
-function previewPageHtml(rec) {
+// ---- PLI / incentive confirmation (Sales only) ----
+// The PLI contact only ever sees identity + dates for the employee — never
+// salary or any settlement figure — and answers with a single amount.
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
+
+function pliContacts() {
+  return (process.env.PLI_CONTACT_UPN || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function pliLink(rec) {
+  return `${PUBLIC_BASE_URL}/api/pli/${rec.id}?token=${rec.pli.token}`;
+}
+
+function pliDetailsTable(rec) {
+  const cell = 'padding:6px 10px;border:1px solid #cfe0f0;';
+  const row = (k, v) => `<tr><td style="${cell}font-weight:600;">${k}</td><td style="${cell}">${v || '—'}</td></tr>`;
+  return `<table style="border-collapse:collapse;font-size:13px;">
+    ${row('Employee Code', rec.empId)}${row('Employee Name', rec.name)}${row('Designation', rec.designation)}
+    ${row('Department', rec.department)}${row('Date of Resignation', rec.dor)}${row('Last Working Day', rec.lwd)}
+  </table>`;
+}
+
+function pliEmailHtml(rec) {
+  return `
+  <div style="font-family:Segoe UI,Arial,sans-serif;color:#0a1f3a;max-width:600px;">
+    <p>Hi Monika,</p>
+    <p>The employee below is leaving shortly. Please confirm their final PLI / incentive amount so it can be included in the Full &amp; Final settlement.</p>
+    ${pliDetailsTable(rec)}
+    <div style="margin:24px 0;">
+      <a href="${pliLink(rec)}" style="background:#003b73;color:#fff;padding:12px 24px;border-radius:5px;text-decoration:none;font-weight:600;">Enter PLI Amount →</a>
+    </div>
+    <p style="font-size:13px;">Enter <b>0</b> (or NIL) if there is no PLI payable. You can reopen the link to update the amount until the settlement is closed.</p>
+  </div>`;
+}
+
+function pliPageHtml(rec) {
+  const submitted = rec.pli.status === 'submitted';
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PLI Amount</title></head>
+  <body style="font-family:Segoe UI,Arial,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;color:#0a1f3a;">
+    <h2>PLI / Incentive Amount</h2>
+    <p style="color:#4c6480;">Please confirm the final PLI / incentive payable to this employee.</p>
+    ${pliDetailsTable(rec)}
+    ${submitted ? `<p style="margin-top:18px;padding:10px 12px;background:#eef8f1;border-radius:6px;">Currently recorded: <b>${rec.pli.amount === 0 ? 'NIL (0)' : fmtInr(rec.pli.amount)}</b>. You can update it below.</p>` : ''}
+    <form id="f" style="margin-top:20px;">
+      <label style="display:block;font-weight:600;margin-bottom:6px;">Final PLI amount (₹) — enter 0 or NIL if none</label>
+      <input id="amt" required autocomplete="off" value="${submitted ? rec.pli.amount : ''}" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #cfe0f0;border-radius:5px;font-size:15px;">
+      <button type="submit" style="margin-top:14px;background:#0f9d58;color:#fff;padding:12px 24px;border:none;border-radius:5px;font-weight:600;font-size:14px;cursor:pointer;">${submitted ? 'Update amount' : 'Submit amount'}</button>
+      <p id="msg" style="margin-top:12px;font-weight:600;"></p>
+    </form>
+    <script>
+      document.getElementById('f').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const msg = document.getElementById('msg');
+        msg.style.color = '#4c6480'; msg.textContent = 'Saving…';
+        const res = await fetch(location.pathname, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: new URLSearchParams(location.search).get('token'), amount: document.getElementById('amt').value }) });
+        const data = await res.json();
+        msg.style.color = res.ok ? '#0f9d58' : '#d64550';
+        msg.textContent = res.ok ? 'Saved — recorded as ' + (data.amount === 0 ? 'NIL (0)' : '₹' + data.amount.toLocaleString('en-IN')) + '. Thank you.' : (data.error || 'Could not save.');
+      });
+    </script>
+  </body></html>`;
+}
+
+// "NIL"/"0" -> 0, otherwise a plain non-negative amount. Returns null if unreadable.
+function parsePliAmount(raw) {
+  const s = String(raw == null ? '' : raw).trim().replace(/[₹,\s]/g, '').replace(/^rs\.?/i, '').replace(/\/-$/, '');
+  if (/^(nil|none)$/i.test(s)) return 0;
+  if (!/^\d+(\.\d+)?$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function sharePli(rec) {
+  const to = pliContacts();
+  if (!to.length) throw new Error('PLI_CONTACT_UPN is not configured');
+  if (!rec.pli.token) rec.pli.token = crypto.randomBytes(24).toString('hex');
+  await outlook.sendMail({
+    fromUpn: SENDER_UPN,
+    to,
+    subject: `PLI amount needed: ${rec.name || ''} (${rec.empId || ''}) — LWD ${rec.lwd || ''}`,
+    html: pliEmailHtml(rec),
+  });
+  await store.updateRecord(rec.id, {
+    pli: { token: rec.pli.token, sharedAt: new Date().toISOString(), status: rec.pli.status === 'submitted' ? 'submitted' : 'shared' },
+  });
+  return to;
+}
+
+// Shares every Sales employee whose LWD is within the next 3 days (and not yet
+// past), once. Anyone else is shared manually from the PLI tab.
+async function runPliSharing() {
+  if (!pliContacts().length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    for (const rec of await store.listRecords()) {
+      if (!isSalesEmployee(rec) || rec.pli.status !== 'not_shared') continue;
+      if (!pliShareWindow(rec, today).windowOpen) continue;
+      await sharePli(rec);
+      console.log(`PLI details shared for ${rec.name} (${rec.empId})`);
+    }
+  } catch (err) {
+    console.error('PLI auto-share failed:', err.message);
+  }
+}
+
+function tdsSubject(rec) {
+  return `TDS: ${rec.name || ''} (${rec.empId || ''})`;
+}
+
+function inr0(n) {
+  return Math.round(Number(n) || 0).toLocaleString('en-IN');
+}
+
+// Accounts-team TDS working sheet: April -> LWD month, laid out like the HR
+// reference sheet (gross in the corner, month columns, PF columns, Net Salary,
+// then the TDS already deducted per month).
+function tdsCalcHtml(tds, failedMonths) {
+  if (!tds.applicable) {
+    return `<div style="margin-top:28px;padding:14px 16px;border:1px solid #cfe0f0;border-radius:6px;background:#f4f9fe;font-size:13px;">
+      <b>TDS calculation not required.</b> No TDS was deducted from this employee's Net Payable in ${tds.previousMonth || 'the previous month'}.
+    </div>`;
+  }
+  const th = 'padding:6px 10px;border:1px solid #cfe0f0;background:#eef5fc;font-weight:600;white-space:nowrap;text-align:right;';
+  const td = 'padding:6px 10px;border:1px solid #cfe0f0;text-align:right;white-space:nowrap;font-family:monospace;';
+  const lbl = 'padding:6px 10px;border:1px solid #cfe0f0;white-space:nowrap;font-weight:600;';
+  const cols = tds.columns;
+  const prior = cols.filter((c) => !c.isLast);
+  const cell = (v) => `<td style="${td}">${inr0(v)}</td>`;
+  const blank = `<td style="${td}"></td>`;
+
+  const head = `<tr>
+    <td style="${th}">${inr0(tds.gross)}</td>
+    ${cols.map((c) => `<th style="${th}">${c.label}</th>`).join('')}
+    <th style="${th}">Total</th>
+    ${cols.map((c) => `<th style="${th}">PF - ${c.label}</th>`).join('')}
+    <th style="${th}">Net Salary</th>
+    ${prior.map((c) => `<th style="${th}">TDS - ${c.label}</th>`).join('')}
+    <th style="${th}">Total TDS</th>
+  </tr>`;
+
+  const row = (label, key, first) => `<tr>
+    <td style="${lbl}">${label}</td>
+    ${cols.map((c) => cell(c[key])).join('')}
+    ${cell(tds.totals[key])}
+    ${first ? cols.map((c) => cell(c.pf)).join('') : cols.map(() => blank).join('')}
+    ${cell(tds.net[key])}
+    ${first ? prior.map((c) => (c.tds == null ? `<td style="${td}">n/a</td>` : cell(c.tds))).join('') : prior.map(() => blank).join('')}
+    ${first ? cell(tds.totals.tds) : blank}
+  </tr>`;
+
+  const netTotal = tds.net.basic + tds.net.hra + tds.net.other;
+  const warn = failedMonths && failedMonths.length
+    ? `<p style="color:#b3261e;font-size:12px;">Could not fetch TDS from PMS for: ${failedMonths.join(', ')} — shown as n/a. Reload to retry.</p>` : '';
+
+  return `<h3 style="margin-top:36px;">TDS Calculation</h3>
+  <p style="color:#4c6480;font-size:13px;margin-top:-6px;">Gross Salary from Appraisal Master. Basic = Gross ÷ 2, HRA = Basic ÷ 2, Other Allowance = Gross − Basic − HRA. PF is the same every full month; the LWD month is pro-rated on Present Days ÷ Working Days (${tds.columns[tds.columns.length - 1].label}).</p>
+  <div style="overflow-x:auto;">
+    <table style="border-collapse:collapse;font-size:12px;">
+      ${head}
+      ${row('Basic', 'basic', true)}
+      ${row('HRA', 'hra', false)}
+      ${row('Other Allowances', 'other', false)}
+    </table>
+  </div>
+  <p style="font-size:13px;margin-top:12px;"><b>Total Net Salary (Apr – ${cols[cols.length - 1].label}):</b> <span style="font-family:monospace;">${fmtInr(netTotal)}</span> &nbsp;|&nbsp; <b>TDS already deducted:</b> <span style="font-family:monospace;">${fmtInr(tds.totals.tds)}</span></p>
+  ${warn}`;
+}
+
+// Preview of the FnF sheet. HR sees exactly what the employee will see; the
+// Accounts view (audience=accounts) appends the TDS calculation below it.
+function previewPageHtml(rec, accountsExtraHtml) {
   const sheetHtml = settlementSheetHtml(rec);
+  const accounts = accountsExtraHtml != null;
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>FnF Sheet Preview</title></head>
-  <body style="font-family:Segoe UI,Arial,sans-serif;max-width:700px;margin:40px auto;color:#0a1f3a;">
+  <body style="font-family:Segoe UI,Arial,sans-serif;max-width:${accounts ? '1280px' : '700px'};margin:${accounts ? '16px' : '40px'} auto;padding:0 16px;color:#0a1f3a;">
     <h2>Full &amp; Final Settlement — ${rec.name||''}</h2>
-    <p style="color:#4c6480;">Preview only — this is exactly what the employee will see once you send it. No action has been taken.</p>
-    ${sheetHtml}
+    <p style="color:#4c6480;">${accounts ? 'Accounts view — the FnF sheet followed by its TDS calculation.' : 'Preview only — this is exactly what the employee will see once you send it. No action has been taken.'}</p>
+    <div style="max-width:700px;">${sheetHtml}</div>
+    ${accounts ? accountsExtraHtml : ''}
   </body></html>`;
 }
 
@@ -241,8 +414,17 @@ async function handleApi(req, res, urlPath) {
     }
     if (req.method === 'PATCH') {
       const body = await readBody(req);
+      // Owned by the server (set by emailed links / mailbox replies) — a stale
+      // browser copy must never overwrite them with its older view.
+      delete body.pli;
+      delete body.tdsReply;
       const rec = await store.updateRecord(id, body);
       if (!rec) return sendJson(res, 404, { error: 'Not found' }), true;
+      // The PLI contact's confirmed amount is the final Incentives figure.
+      if (rec.pli.status === 'submitted') {
+        rec.settlement.earnings.incentives = rec.pli.amount;
+        rec.comp.pli = rec.pli.amount;
+      }
       sendJson(res, 200, withDerived(rec));
       return true;
     }
@@ -292,8 +474,118 @@ async function handleApi(req, res, urlPath) {
       res.writeHead(404, { 'Content-Type': 'text/html' });
       return res.end(responsePageHtml('Not found', 'This settlement record could not be found.')), true;
     }
+    let accountsExtra;
+    if (new URL(req.url, `http://${req.headers.host}`).searchParams.get('audience') === 'accounts') {
+      const { tdsByMonth, failed } = await store.resolveTdsByMonth(rec);
+      accountsExtra = tdsCalcHtml(computeTdsCalc(rec, tdsByMonth), failed);
+    }
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(previewPageHtml(rec));
+    res.end(previewPageHtml(rec, accountsExtra));
+    return true;
+  }
+
+  // Emails the FnF sheet plus its TDS calculation to the accounts/tax contact.
+  // ACCOUNTS_CONTACT_UPN is the test mailbox for now; point it at Sarika to go live.
+  const sendAccountsMatch = urlPath.match(/^\/api\/records\/(\d+)\/send-to-accounts$/);
+  if (sendAccountsMatch && req.method === 'POST') {
+    const rec = await store.getRecord(sendAccountsMatch[1]);
+    if (!rec) return sendJson(res, 404, { error: 'Record not found' }), true;
+    const to = (process.env.ACCOUNTS_CONTACT_UPN || SENDER_UPN).split(',').map((s) => s.trim()).filter(Boolean);
+
+    const { tdsByMonth, failed } = await store.resolveTdsByMonth(rec);
+    const html = `
+      <div style="font-family:Segoe UI,Arial,sans-serif;color:#0a1f3a;">
+        <p>Hi,</p>
+        <p>Please find the Full &amp; Final settlement sheet for ${rec.name || ''} (${rec.empId || ''}) below, followed by the TDS calculation.</p>
+        ${settlementSheetHtml(rec)}
+        ${tdsCalcHtml(computeTdsCalc(rec, tdsByMonth), failed)}
+      </div>`;
+    const sentAt = new Date().toISOString();
+    await outlook.sendMail({
+      fromUpn: SENDER_UPN,
+      to,
+      subject: tdsSubject(rec),
+      html,
+    });
+    await store.updateRecord(rec.id, {
+      sla: { taxEmailSentAt: sentAt.slice(0, 10) },
+      tdsReply: { status: 'awaiting', sentAt, messageId: '', receivedAt: '', amount: null, preview: '' },
+    });
+    sendJson(res, 200, { sentTo: to.join(', ') });
+    return true;
+  }
+
+  // HR (or the auto-share job) sends a Sales employee's details to the PLI contact.
+  const sharePliMatch = urlPath.match(/^\/api\/records\/(\d+)\/share-pli$/);
+  if (sharePliMatch && req.method === 'POST') {
+    const rec = await store.getRecord(sharePliMatch[1]);
+    if (!rec) return sendJson(res, 404, { error: 'Record not found' }), true;
+    if (!isSalesEmployee(rec)) return sendJson(res, 400, { error: 'PLI is only confirmed for Sales employees' }), true;
+    const to = await sharePli(rec);
+    sendJson(res, 200, { sentTo: to.join(', ') });
+    return true;
+  }
+
+  // The PLI contact's token-gated page: details only (no salary), one amount field.
+  const pliPageMatch = urlPath.match(/^\/api\/pli\/(\d+)$/);
+  if (pliPageMatch) {
+    const rec = await store.getRecord(pliPageMatch[1]);
+    const q = new URL(req.url, `http://${req.headers.host}`).searchParams;
+    const body = req.method === 'POST' ? await readBody(req) : {};
+    const token = req.method === 'POST' ? body.token : q.get('token');
+    const valid = rec && rec.pli.token && token === rec.pli.token;
+
+    if (req.method === 'GET') {
+      res.writeHead(valid ? 200 : 403, { 'Content-Type': 'text/html' });
+      res.end(valid ? pliPageHtml(rec) : responsePageHtml('Invalid link', 'This PLI link is invalid or has expired.'));
+      return true;
+    }
+    if (req.method === 'POST') {
+      if (!valid) return sendJson(res, 403, { error: 'This PLI link is invalid or has expired.' }), true;
+      const amount = parsePliAmount(body.amount);
+      if (amount == null) return sendJson(res, 400, { error: 'Enter a valid amount, or 0 / NIL if there is no PLI.' }), true;
+      await store.updateRecord(rec.id, {
+        pli: { status: 'submitted', amount, submittedAt: new Date().toISOString() },
+        settlement: { earnings: { incentives: amount } },
+        comp: { pli: amount },
+      });
+      sendJson(res, 200, { amount });
+      return true;
+    }
+  }
+
+  // Looks for the tax team's reply to the TDS email and, if it states an amount
+  // or NIL, writes it into the settlement sheet's TDS deduction.
+  const checkReplyMatch = urlPath.match(/^\/api\/records\/(\d+)\/check-tds-reply$/);
+  if (checkReplyMatch && req.method === 'POST') {
+    const rec = await store.getRecord(checkReplyMatch[1]);
+    if (!rec) return sendJson(res, 404, { error: 'Record not found' }), true;
+    if (!rec.tdsReply || !rec.tdsReply.sentAt) return sendJson(res, 400, { error: 'This sheet has not been sent to the Accounts team yet' }), true;
+
+    const reply = await outlook.findLatestReply({
+      mailboxUpn: SENDER_UPN,
+      since: rec.tdsReply.sentAt,
+      subjectTag: tdsSubject(rec),
+      // Tanya (the verifier) and the Accounts contact(s) — ACCOUNTS_CONTACT_UPN may list several, comma-separated.
+      fromUpns: [SENDER_UPN, ...(process.env.ACCOUNTS_CONTACT_UPN || '').split(',')],
+    });
+
+    if (reply && reply.id !== rec.tdsReply.messageId) {
+      const parsed = parseTdsReply(reply.text);
+      const preview = reply.text.trim().replace(/\s+/g, ' ').slice(0, 160);
+      const base = { messageId: reply.id, receivedAt: reply.receivedAt, preview };
+      if (parsed.kind === 'unclear') {
+        await store.updateRecord(rec.id, { tdsReply: { ...base, status: 'unclear', amount: null } });
+      } else {
+        const amount = parsed.kind === 'nil' ? 0 : parsed.amount;
+        await store.updateRecord(rec.id, {
+          tdsReply: { ...base, status: 'applied', amount },
+          settlement: { deductions: { tds: amount } },
+        });
+      }
+    }
+    const updated = await store.getRecord(rec.id);
+    sendJson(res, 200, { tdsReply: updated.tdsReply, tds: updated.settlement.deductions.tds });
     return true;
   }
 
@@ -422,6 +714,24 @@ async function handleApi(req, res, urlPath) {
     return true;
   }
 
+  // Lazy-loaded on demand from the "Net Payable — Previous Months" panel —
+  // fetching this for every employee on every dashboard load pushed cold-start
+  // latency past what's acceptable, since each month is a sequential PMS call.
+  const netPayHistoryMatch = urlPath.match(/^\/api\/records\/(\d+)\/netpay-history$/);
+  if (netPayHistoryMatch && req.method === 'GET') {
+    const id = netPayHistoryMatch[1];
+    const rec = await store.getRecord(id);
+    if (!rec) return sendJson(res, 404, { error: 'Record not found' }), true;
+
+    if (!rec.settlement.netPayableHistory || !rec.settlement.netPayableHistory.length) {
+      const history = await store.resolveNetPayableHistory(rec.empId, rec.lwd);
+      await store.updateRecord(id, { settlement: { netPayableHistory: history } });
+    }
+    const updated = await store.getRecord(id);
+    sendJson(res, 200, { netPayableHistory: updated.settlement.netPayableHistory });
+    return true;
+  }
+
   if (urlPath === '/api/pms/notice-period-summary' && req.method === 'GET') {
     const asOf = new URL(req.url, `http://${req.headers.host}`).searchParams.get('asOf') || new Date().toISOString().slice(0, 10);
     const employees = await pms.getEmployeeDetails('');
@@ -499,6 +809,13 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`FnF Settlement app serving at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`FnF Settlement app serving at http://localhost:${PORT}`);
+    // Local/long-running only: serverless hosts need a scheduled job instead.
+    setTimeout(runPliSharing, 30 * 1000);
+    setInterval(runPliSharing, 30 * 60 * 1000);
+  });
+}
+
+module.exports = server;

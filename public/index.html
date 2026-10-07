@@ -166,6 +166,12 @@ input:focus, select:focus{outline:2px solid var(--gold-bright);outline-offset:1p
 .ledger tr.net td{font-family:"Fraunces",serif;font-size:19px;padding-top:14px;}
 .ledger tr.net.pay td.num{color:var(--green);}
 .ledger tr.net.recover td.num{color:var(--red);}
+.np-month{border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:10px;}
+.np-month summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:16px;font-weight:600;}
+.np-month summary::-webkit-details-marker{display:none;}
+.np-month summary::before{content:'▸';margin-right:8px;font-size:11px;color:var(--ink-soft);}
+.np-month[open] summary::before{content:'▾';}
+.np-summary-figs{display:flex;gap:14px;font-family:"IBM Plex Mono",monospace;font-size:12px;font-weight:400;color:var(--ink-soft);flex-wrap:wrap;}
 
 .queue-table th, .queue-table td{padding:8px 8px;font-size:13.5px;}
 
@@ -347,15 +353,26 @@ function computeWorkingPresentDays(lwd, fallbackDate){
   const presentDays = lwd ? countEligibleDays(p.y, p.m, 1, p.d) : workingDays;
   return { workingDays, presentDays };
 }
-// Salary Release Condition: if LWD falls in the month after DOR's month, the
-// withheld previous month's salary is released in full, alongside the current
-// month's salary pro-rated up to LWD. Same month for both = nothing withheld.
+// Salary Release Condition: salary for the month of resignation (DOR) is held
+// when LWD falls in a later calendar month; it is then released in full
+// alongside the LWD month's salary pro-rated up to LWD. Notice is 1 month, so
+// "later month" is normally the next one (a 31 Jan resignation can reach 2 Mar).
+// DOR and LWD in the same month hold nothing.
+function monthIndex(ymd){
+  const [y,m] = ymd.split('-').map(Number);
+  return y*12 + (m-1);
+}
 function computeSalarySplit(grossSalary, dor, lwd, workingDays, presentDays){
   const gross = Number(grossSalary||0);
   const salaryCurrentMonth = workingDays>0 ? Math.round((gross/workingDays)*presentDays) : 0;
-  const spansMonthBoundary = dor && lwd && dor.slice(0,7) !== lwd.slice(0,7);
-  const salaryPreviousMonth = spansMonthBoundary ? gross : 0;
+  const heldFromResignationMonth = dor && lwd && monthIndex(lwd) > monthIndex(dor);
+  const salaryPreviousMonth = heldFromResignationMonth ? gross : 0;
   return { salaryCurrentMonth, salaryPreviousMonth };
+}
+// TDS applies only if TDS was deducted from Net Payable in the month before LWD's month.
+function isTdsApplicable(rec){
+  const prev = rec.settlement && rec.settlement.previousMonthDues;
+  return !!(rec.lwd && prev && Number(prev.tds) > 0);
 }
 function daysBetween(a,b){ return Math.round((new Date(b) - new Date(a)) / 86400000); }
 function shiftDate(dateStr, days){
@@ -444,6 +461,25 @@ let view = "overview";
 let listFilter = "all";
 let listSortDir = "asc";
 let exitListData = null; // { fromDate, toDate, count, employees } | { error: true } | null (not loaded yet)
+const netPayHistoryLoading = new Set(); // record ids currently fetching /netpay-history
+const netPayHistoryFetched = new Set(); // record ids that have completed a fetch (even if empty)
+async function loadNetPayHistory(idx){
+  const rec = state.records[idx];
+  if(!rec || netPayHistoryLoading.has(rec.id)) return;
+  netPayHistoryLoading.add(rec.id);
+  render();
+  try{
+    const res = await fetch(`/api/records/${rec.id}/netpay-history`);
+    const data = await res.json();
+    state.records[idx].settlement.netPayableHistory = data.netPayableHistory || [];
+  }catch(e){
+    alert('Failed to load Net Payable history: ' + e.message);
+  }finally{
+    netPayHistoryLoading.delete(rec.id);
+    netPayHistoryFetched.add(rec.id);
+    render();
+  }
+}
 async function loadExitList(){
   if(exitListData) return; // loaded once per page session
   try{
@@ -614,7 +650,177 @@ function renderTabbar(){
     <div class="tab ${view==='overview'?'active':''}" onclick="setTab('overview')">Overview</div>
     <div class="tab ${view==='list'?'active':''}" onclick="openList('all')">All Employees</div>
     <div class="tab ${view==='detail'?'active':''}" onclick="setTab('detail')">Employee Detail</div>
+    <div style="margin-left:auto;display:flex;gap:10px;">
+      <div class="tab ${view==='accounts'?'active':''}" onclick="setTab('accounts')">Accounts Team</div>
+      <div class="tab ${view==='pli'?'active':''}" onclick="setTab('pli')">PLI</div>
+      <div class="tab ${view==='dc'?'active':''}" onclick="setTab('dc')">DC Team</div>
+    </div>
   `;
+}
+
+/* ---------------- render: team hand-off lists ---------------- */
+const TEAM_TITLES = { accounts:'Accounts Team', pli:'PLI', dc:'DC Team' };
+function teamColumns(team){
+  const base = [
+    { label:'Employee Code', render:r=>r.empId||'—' },
+    { label:'Employee Name', render:r=>`<a href="javascript:void(0)" onclick="openRecord(${state.records.indexOf(r)})" style="color:var(--navy);font-weight:600;text-decoration:none;">${r.name||'(unnamed)'}</a>` },
+    { label:'Designation', render:r=>r.designation||'—' },
+    { label:'Department', render:r=>r.department||'—' },
+  ];
+  if(team==='accounts'){
+    return base.concat([
+      { label:'TDS', render:r=>isTdsApplicable(r) ? `Applicable (${fmt(Number(r.settlement.previousMonthDues.tds)||0)} last month)` : 'Not applicable' },
+      { label:'FnF Sheet with TDS', render:r=>`<a href="javascript:void(0)" onclick="openAccountsSheet(${r.id})" style="color:var(--navy);font-weight:600;">${accountsSheetId===r.id?'Viewing ↓':'View Sheet →'}</a>` },
+    ]);
+  }
+  const dates = [
+    { label:'DOR', render:r=>r.dor||'—' },
+    { label:'LWD', render:r=>r.lwd||'—' },
+  ];
+  if(team==='pli'){
+    return base.concat(dates, [
+      { label:'PLI Status', render:r=>pliStatusText(r) },
+      { label:'PLI Amount', render:r=>r.pli && r.pli.status==='submitted' ? (r.pli.amount===0 ? '₹0.00 (Nil)' : fmt(Number(r.pli.amount)||0)) : '—' },
+      { label:'', render:r=>`<button class="btn secondary" style="padding:6px 12px;font-size:11px;" onclick="sharePli(${r.id})">${r.pli && r.pli.status!=='not_shared' ? 'Re-send link' : 'Share with Monika'}</button>` },
+    ]);
+  }
+  return base.concat(dates);
+}
+// PLI is only confirmed for Sales; their details go out 3 days before LWD.
+function isSalesEmployee(r){ return String(r.department||'').trim().toLowerCase()==='sales'; }
+function pliStatusText(r){
+  const p = r.pli || { status:'not_shared' };
+  if(p.status==='submitted') return `Received ${String(p.submittedAt||'').slice(0,10)}`;
+  if(p.status==='shared') return `Shared ${String(p.sharedAt||'').slice(0,10)} — awaiting amount`;
+  if(!r.lwd) return 'No LWD yet';
+  const from = shiftDate(r.lwd,-3);
+  const today = new Date().toISOString().slice(0,10);
+  if(today > r.lwd) return 'LWD passed — share manually';
+  return today >= from ? 'Due now' : `Auto-shares on ${from}`;
+}
+async function sharePli(id){
+  try{
+    const res = await fetch(`/api/records/${id}/share-pli`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || res.status);
+    const fresh = await (await fetch(`/api/records/${id}`)).json();
+    const rec = recById(id);
+    if(rec) rec.pli = fresh.pli;
+    alert('PLI details sent to ' + data.sentTo);
+  }catch(e){
+    alert('Could not share PLI details: ' + e.message);
+  }finally{
+    render();
+  }
+}
+// Pull in the PLI contact's answer (set server-side from the emailed link) without waiting for a reload.
+let pliPolling = false;
+async function pollPli(){
+  if(pliPolling) return;
+  pliPolling = true;
+  try{
+    for(const r of state.records){
+      if(!r.pli || !isSalesEmployee(r)) continue;
+      const fresh = await (await fetch(`/api/records/${r.id}`)).json();
+      if(JSON.stringify(fresh.pli) === JSON.stringify(r.pli)) continue;
+      r.pli = fresh.pli;
+      if(fresh.pli.status==='submitted'){ r.settlement.earnings.incentives = fresh.settlement.earnings.incentives; r.comp.pli = fresh.comp.pli; }
+      render();
+    }
+  } catch(e){ /* try again next tick */ }
+  finally { pliPolling = false; }
+}
+setInterval(pollPli, 15000);
+function renderTeamList(team){
+  const cols = teamColumns(team);
+  let rows = state.records;
+  if(team==='pli') rows = rows.filter(isSalesEmployee).slice().sort((a,b)=>(a.lwd||'9999').localeCompare(b.lwd||'9999'));
+  return `
+  <div class="panel">
+    <div class="panel-head"><h2>${TEAM_TITLES[team]}</h2><span class="frtag">${rows.length} record(s)</span></div>
+    <div class="panel-sub">${team==='pli' ? 'Sales employees only. Their name, department and dates (no salary details) go to Monika 3 days before LWD; the amount she enters becomes the final Incentives figure in the settlement sheet.' : `Hand-off view for the ${TEAM_TITLES[team]} — read-only summary, sourced live from the same FnF records.`}</div>
+    <table class="ledger queue-table">
+      <tr>${cols.map(c=>`<th>${c.label}</th>`).join('')}</tr>
+      ${rows.map(r=>`<tr>${cols.map(c=>`<td>${c.render(r)}</td>`).join('')}</tr>`).join('')}
+    </table>
+    <div class="actions">
+      <button class="btn secondary" onclick="setTab('overview')">← Back to Overview</button>
+    </div>
+  </div>
+  ${team==='accounts' && accountsSheetId!=null ? `
+  <div class="panel" id="accounts-sheet-panel">
+    <div class="panel-head"><h2>FnF Sheet &amp; TDS Calculation</h2>
+      <a class="frtag" href="/api/records/${accountsSheetId}/preview?audience=accounts" target="_blank">Open in new tab ↗</a>
+    </div>
+    <div class="actions" style="margin-top:0;">
+      <button class="btn" id="send-accounts-btn" onclick="sendToAccounts(${accountsSheetId})">${tdsReplyOf(accountsSheetId).status==='not_sent' ? 'Send to Accounts Team by email' : 'Re-send to Accounts Team'}</button>
+      ${tdsReplyOf(accountsSheetId).status!=='not_sent' ? `<button class="btn secondary" onclick="checkTdsReply(${accountsSheetId})">Check for reply</button>` : ''}
+    </div>
+    ${tdsReplyNote(tdsReplyOf(accountsSheetId))}
+    <iframe src="/api/records/${accountsSheetId}/preview?audience=accounts" style="width:100%;height:900px;border:0;" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+24)+'px'}catch(e){}"></iframe>
+  </div>` : ''}`;
+}
+let accountsSheetId = null;
+function recById(id){ return state.records.find(r=>r.id===id); }
+function tdsReplyOf(id){ const r = recById(id); return (r && r.tdsReply) || { status:'not_sent' }; }
+function tdsReplyNote(t){
+  const amt = t.amount===0 ? 'NIL (₹0)' : fmt(Number(t.amount)||0);
+  if(t.status==='awaiting') return `<div class="callout">Sent to the Accounts team — waiting for their reply. The TDS amount (or NIL) will be filled into the settlement sheet automatically.</div>`;
+  if(t.status==='applied') return `<div class="callout">Accounts replied: <b>${amt}</b> — entered as the TDS deduction in the settlement sheet.</div>`;
+  if(t.status==='unclear') return `<div class="callout danger">Accounts replied, but no single TDS amount or NIL could be read from it: “${t.preview||''}”. Please enter the TDS amount in the settlement sheet manually.</div>`;
+  return '';
+}
+async function sendToAccounts(id){
+  const btn = document.getElementById('send-accounts-btn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  try{
+    const res = await fetch(`/api/records/${id}/send-to-accounts`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || res.status);
+    // The server just set tdsReply/taxEmailSentAt — pull them in so a later auto-save doesn't overwrite them.
+    const fresh = await (await fetch(`/api/records/${id}`)).json();
+    const rec = recById(id);
+    if(rec){ rec.tdsReply = fresh.tdsReply; rec.sla.taxEmailSentAt = fresh.sla.taxEmailSentAt; }
+    alert('Sent to ' + data.sentTo);
+  }catch(e){
+    alert('Failed to send: ' + e.message);
+  }finally{
+    render();
+  }
+}
+async function checkTdsReply(id, quiet){
+  try{
+    const res = await fetch(`/api/records/${id}/check-tds-reply`, { method:'POST' });
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || res.status);
+    const rec = recById(id);
+    if(!rec) return;
+    const changed = JSON.stringify(rec.tdsReply) !== JSON.stringify(data.tdsReply);
+    rec.tdsReply = data.tdsReply;
+    if(data.tdsReply.status==='applied') rec.settlement.deductions.tds = data.tds;
+    if(changed || !quiet) render();
+    if(!quiet && !changed) alert('No new reply from the Accounts team yet.');
+  }catch(e){
+    if(!quiet) alert('Could not check for a reply: ' + e.message);
+  }
+}
+// Keep every sheet that was sent for TDS verification in sync with the latest
+// confirmed reply (Tanya's or the Accounts team's), whichever view is open.
+let tdsReplyPolling = false;
+async function pollTdsReplies(){
+  if(tdsReplyPolling) return;
+  tdsReplyPolling = true;
+  try{
+    for(const r of state.records){
+      if(r.tdsReply && r.tdsReply.status && r.tdsReply.status!=='not_sent') await checkTdsReply(r.id, true);
+    }
+  } finally { tdsReplyPolling = false; }
+}
+setInterval(pollTdsReplies, 30000);
+function openAccountsSheet(id){
+  accountsSheetId = id;
+  render();
+  setTimeout(()=>{ const el = document.getElementById('accounts-sheet-panel'); if(el) el.scrollIntoView({behavior:'smooth'}); }, 0);
 }
 
 /* ---------------- render: overview ---------------- */
@@ -732,6 +938,13 @@ function renderDetail(){
   const isPay = settlementTotals.netPayable >= 0;
   const st = recStatus(rec);
   const sla = recSla(rec);
+  // §5 salary components show real values only where TDS applies (same rule and
+  // formulas as the Accounts TDS sheet); otherwise they stay at 0.
+  const tdsOn = isTdsApplicable(rec);
+  const tdsGross = tdsOn ? (Number(rec.comp.grossSalary) || 0) : 0;
+  const tdsBasic = Math.round(tdsGross / 2);
+  const tdsHra = Math.round(tdsBasic / 2);
+  const tdsOther = tdsGross - tdsBasic - tdsHra;
 
   return `
   <div class="panel">
@@ -846,15 +1059,6 @@ function renderDetail(){
         ${field(`<label>Present Days</label>`, `<input type="number" value="${rec.comp.presentDays}" oninput="state.records[${activeIndex}].comp.presentDays=this.value;render()">`)}
         ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="number" step="0.1" value="${rec.comp.tenureYears}" oninput="updateTenureYears(${activeIndex},this.value)">`)}
         ${field(`<label>TA Bill reconciliation (₹) <span class="fr">+owed / −recover</span></label>`, `<input type="number" value="${rec.comp.taBill}" oninput="state.records[${activeIndex}].comp.taBill=this.value;render()">`)}
-        ${field(`<label>NPS entry (₹)</label>`, `<input type="number" value="${rec.comp.nps}" oninput="state.records[${activeIndex}].comp.nps=this.value;render()">`)}
-        ${field(`<label>VPF entry (₹)</label>`, `<input type="number" value="${rec.comp.vpf}" oninput="state.records[${activeIndex}].comp.vpf=this.value;render()">`)}
-      </div>
-      <div class="callout danger" style="margin-top:18px;">
-        <b>Open Items — pending sign-off (§10):</b> TDS methodology and Incentive/PLI treatment are not finalized. Placeholders only.
-      </div>
-      <div class="field-grid">
-        ${field(`<label>TDS (₹) <span class="fr">Open Item 1</span></label>`, `<input type="number" value="${rec.comp.tds}" oninput="state.records[${activeIndex}].comp.tds=this.value;render()">`)}
-        ${field(`<label>Incentive / PLI (₹) <span class="fr">Open Item 2</span></label>`, `<input type="number" value="${rec.comp.pli}" oninput="state.records[${activeIndex}].comp.pli=this.value;render()">`)}
       </div>
       <table class="ledger" style="margin-top:18px;">
         <tr><th>Computed Component</th><th class="num">Amount</th></tr>
@@ -867,15 +1071,59 @@ function renderDetail(){
 
     <hr class="divider">
 
+    <div class="section" id="sec-netpay-history">
+      <div class="section-title"><span class="num">4</span>Net Payable — Previous Months <span class="frtag" style="margin-left:auto;">via PMS Net Payable Details</span></div>
+      <div class="panel-sub" style="margin-top:-4px;">${(rec.settlement.netPayableHistory||[]).length ? `Collated payroll history for the last ${rec.settlement.netPayableHistory.length} month(s) on file. Click a month to view its full breakdown.` : 'Fetched on demand — click below to pull the last few months of payroll history from PMS.'}</div>
+      ${netPayHistoryLoading.has(rec.id) ? `<div class="callout">Loading previous months' Net Payable data…</div>` : ''}
+      ${(!rec.settlement.netPayableHistory || !rec.settlement.netPayableHistory.length) && !netPayHistoryFetched.has(rec.id) && !netPayHistoryLoading.has(rec.id) ? `
+        <button class="btn secondary" onclick="loadNetPayHistory(${activeIndex})">Load Net Payable History →</button>
+      ` : ''}
+      ${(!rec.settlement.netPayableHistory || !rec.settlement.netPayableHistory.length) && netPayHistoryFetched.has(rec.id) && !netPayHistoryLoading.has(rec.id) ? `
+        <div class="panel-sub">No payroll history found for this employee on PMS.</div>
+      ` : ''}
+      ${(rec.settlement.netPayableHistory && rec.settlement.netPayableHistory.length) ? rec.settlement.netPayableHistory.map((m) => `
+        <details class="np-month">
+          <summary>
+            <span>${m.month}</span>
+            <span class="np-summary-figs">
+              <span>Salary: ${fmt(Number(m.Salary)||0)}</span>
+              <span>PF: ${fmt(Number(m.PF)||0)}</span>
+              <span>TDS: ${fmt(Number(m.TDS)||0)}</span>
+              <span>NPS: ${fmt(Number(m.Total_NPS)||0)}</span>
+            </span>
+          </summary>
+          <table class="ledger" style="margin-top:10px;">
+            <tr><th>Field</th><th class="num">Value</th></tr>
+            <tr><td>Leave B/F</td><td class="num">${m.Leave_BF ?? '—'}</td></tr>
+            <tr><td>Leave Granted</td><td class="num">${m.Leave_Granted ?? '—'}</td></tr>
+            <tr><td>Leave Adjusted</td><td class="num">${m.Leave_Adjusted ?? '—'}</td></tr>
+            <tr><td>Payable Days</td><td class="num">${m.Payable_Days ?? '—'}</td></tr>
+            <tr><td>Working Days</td><td class="num">${m['Working Days'] ?? '—'}</td></tr>
+            <tr><td>Leave C/F</td><td class="num">${m.Leave_CF ?? '—'}</td></tr>
+            <tr><td>Pay Scale</td><td class="num">${m.PayScale ?? '—'}</td></tr>
+            <tr><td>OT Amount</td><td class="num">${fmt(Number(m.OT_Amount)||0)}</td></tr>
+            <tr><td>Advance</td><td class="num">${fmt(Number(m.Advance)||0)}</td></tr>
+            <tr><td>Loan EMI</td><td class="num">${fmt(Number(m.Loan_EMI)||0)}</td></tr>
+            <tr><td>PF</td><td class="num">${fmt(Number(m.PF)||0)}</td></tr>
+            <tr><td>TDS</td><td class="num">${fmt(Number(m.TDS)||0)}</td></tr>
+            <tr><td>Total NPS</td><td class="num">${fmt(Number(m.Total_NPS)||0)}</td></tr>
+            <tr class="subtotal"><td>Salary</td><td class="num">${fmt(Number(m.Salary)||0)}</td></tr>
+          </table>
+        </details>
+      `).join('') : ''}
+    </div>
+
+    <hr class="divider">
+
     <div class="section" id="sec-tds">
-      <div class="section-title"><span class="num">4</span>TDS Calculation &amp; Approval Workflow <span class="frtag" style="margin-left:auto;">New — automates §10 Open Item 1</span></div>
+      <div class="section-title"><span class="num">5</span>TDS Calculation &amp; Approval Workflow <span class="frtag" style="margin-left:auto;">New — automates §10 Open Item 1</span></div>
 
       <table class="ledger">
         <tr><th>Salary Component</th><th class="num">Amount</th></tr>
-        <tr><td>Gross Salary</td><td class="num">${fmt(0)}</td></tr>
-        <tr><td>Basic (50% of Gross)</td><td class="num">${fmt(0)}</td></tr>
-        <tr><td>HRA (50% of Basic)</td><td class="num">${fmt(0)}</td></tr>
-        <tr><td>Other Allowances (Gross − Basic − HRA)</td><td class="num">${fmt(0)}</td></tr>
+        <tr><td>Gross Salary <span class="fr">Appraisal Master</span></td><td class="num">${fmt(tdsGross)}</td></tr>
+        <tr><td>Basic (50% of Gross)</td><td class="num">${fmt(tdsBasic)}</td></tr>
+        <tr><td>HRA (50% of Basic)</td><td class="num">${fmt(tdsHra)}</td></tr>
+        <tr><td>Other Allowances (Gross − Basic − HRA)</td><td class="num">${fmt(tdsOther)}</td></tr>
         <tr class="subtotal"><td>Previous Month TDS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.tds) || 0)}</td></tr>
         <tr class="subtotal"><td>Previous Month NPS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.nps) || 0)}</td></tr>
       </table>
@@ -923,7 +1171,7 @@ function renderDetail(){
     <hr class="divider">
 
     <div class="section" id="sec-sheet">
-      <div class="section-title"><span class="num">5</span>FnF Settlement Sheet — Review &amp; Send <span class="frtag" style="margin-left:auto;">FR-4.1 – FR-4.3</span></div>
+      <div class="section-title"><span class="num">6</span>FnF Settlement Sheet — Review &amp; Send <span class="frtag" style="margin-left:auto;">FR-4.1 – FR-4.3</span></div>
       ${(()=>{
         const months = settlementMonthLabels(rec.lwd);
         const st = settlementCalc(rec);
@@ -938,7 +1186,7 @@ function renderDetail(){
         <tr><th>Earnings</th><th class="num">₹</th></tr>
         <tr><td>Salary (${months.current})</td><td class="num">${amtInput('earnings','salaryCurrentMonth')}</td></tr>
         <tr><td>Salary (${months.previous})</td><td class="num">${amtInput('earnings','salaryPreviousMonth')}</td></tr>
-        <tr><td>Incentives</td><td class="num">${amtInput('earnings','incentives')}</td></tr>
+        <tr><td>Incentives${rec.pli && rec.pli.status==='submitted' ? ' <span class="fr">final — per PLI team</span>' : (rec.pli && rec.pli.status==='shared' ? ' <span class="fr">awaiting PLI team</span>' : '')}</td><td class="num">${amtInput('earnings','incentives')}</td></tr>
         <tr><td>TA Bill (if positive)</td><td class="num">${amtInput('earnings','taBillPositive')}</td></tr>
         <tr><td>Gratuity</td><td class="num">${amtInput('earnings','gratuity')}</td></tr>
         <tr><td>Any other Reimbursement</td><td class="num">${amtInput('earnings','otherReimbursement')}</td></tr>
@@ -958,7 +1206,7 @@ function renderDetail(){
         <tr class="deduct"><td>Personal rides deduction</td><td class="num">${amtInput('deductions','personalRides')}</td></tr>
         <tr class="deduct"><td>Any other deductions (Pluxee Meal)</td><td class="num">${amtInput('deductions','pluxeeMeal')}</td></tr>
         <tr class="deduct"><td>ESI</td><td class="num">${amtInput('deductions','esi')}</td></tr>
-        <tr class="deduct"><td>TDS</td><td class="num">${amtInput('deductions','tds')}</td></tr>
+        <tr class="deduct"><td>TDS${rec.tdsReply && rec.tdsReply.status==='applied' ? ' <span class="fr">per Accounts reply</span>' : (rec.tdsReply && rec.tdsReply.status==='awaiting' ? ' <span class="fr">awaiting Accounts reply</span>' : '')}</td><td class="num">${amtInput('deductions','tds')}</td></tr>
         <tr class="deduct"><td>PT</td><td class="num">${amtInput('deductions','pt')}</td></tr>
         <tr class="subtotal"><td>Total Deductions</td><td class="num">${fmt(st.deductionsTotal)}</td></tr>
       </table>
@@ -990,7 +1238,7 @@ function renderDetail(){
     <hr class="divider">
 
     <div class="section" id="sec-payment">
-      <div class="section-title"><span class="num">6</span>Payment Processing <span class="frtag" style="margin-left:auto;">FR-5.1 – FR-5.2</span></div>
+      <div class="section-title"><span class="num">7</span>Payment Processing <span class="frtag" style="margin-left:auto;">FR-5.1 – FR-5.2</span></div>
       <div class="toggle-row">
         <div class="t-label">HR has informed AP team</div>
         <label class="switch"><input type="checkbox" ${rec.payment.apInformed?'checked':''} onchange="state.records[${activeIndex}].payment.apInformed=this.checked;render()"><span class="slider"></span></label>
@@ -1004,7 +1252,7 @@ function renderDetail(){
     <hr class="divider">
 
     <div class="section" id="sec-closure">
-      <div class="section-title"><span class="num">7</span>Closure Documentation <span class="frtag" style="margin-left:auto;">FR-6.1 – FR-6.2</span></div>
+      <div class="section-title"><span class="num">8</span>Closure Documentation <span class="frtag" style="margin-left:auto;">FR-6.1 – FR-6.2</span></div>
       <div class="toggle-row">
         <div class="t-label">Experience Letter issued</div>
         <label class="switch"><input type="checkbox" ${rec.closure.expLetter?'checked':''} onchange="state.records[${activeIndex}].closure.expLetter=this.checked;render()"><span class="slider"></span></label>
@@ -1027,6 +1275,7 @@ function render(){
   const app = document.getElementById('app');
   if(view==='overview') app.innerHTML = renderOverview();
   else if(view==='list') app.innerHTML = renderList();
+  else if(view==='accounts' || view==='pli' || view==='dc') app.innerHTML = renderTeamList(view);
   else app.innerHTML = renderDetail();
   scheduleSync();
 }
