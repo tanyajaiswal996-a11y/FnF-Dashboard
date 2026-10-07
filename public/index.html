@@ -521,10 +521,6 @@ function setAssetIssued(i, val){
   d.dcTeam = Object.assign({}, d.dcTeam, { assetIssued: val });
   render();
 }
-function runTdsCalc(i){ state.records[i].sla.tdsCalc = 'completed'; render(); }
-function sendTaxTeamEmail(i){ state.records[i].sla.taxEmailSentAt = asOfDate; render(); }
-function sendTaxReminder(i){ state.records[i].sla.reminderSent = true; render(); }
-function setTaxApproval(i, val){ state.records[i].sla.taxApproval = val; render(); }
 function setEmployeeSlaAck(i, val){ state.records[i].sla.ack = val; render(); }
 
 /* ---------------- navigation ---------------- */
@@ -1240,45 +1236,6 @@ function renderDetail(){
         <tr class="subtotal"><td>Previous Month TDS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.tds) || 0)}</td></tr>
         <tr class="subtotal"><td>Previous Month NPS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.nps) || 0)}</td></tr>
       </table>
-
-      <hr class="divider">
-
-      <h4 style="font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-soft);margin:0 0 14px;">TDS &amp; FnF SLA Tracker</h4>
-
-      <table class="ledger">
-        <tr><th>Stage</th><th>Target SLA</th><th>Status</th><th></th></tr>
-        <tr>
-          <td>TDS Calculation</td>
-          <td>${shiftDate(rec.lwd,-1)} · 9:00/9:30 AM</td>
-          <td><span class="badge ${rec.sla.tdsCalc==='completed'?'status-closed':'status-pending'}">${rec.sla.tdsCalc==='completed'?'COMPLETED':'PENDING'}</span></td>
-          <td><button class="btn secondary" style="padding:6px 12px;font-size:11px;" onclick="runTdsCalc(${activeIndex})">Run Calculation</button></td>
-        </tr>
-        <tr>
-          <td>Tax Team Approval (Sarika)</td>
-          <td>By EOD</td>
-          <td>
-            <select onchange="setTaxApproval(${activeIndex}, this.value)" ${!rec.sla.taxEmailSentAt?'disabled':''}>
-              <option value="pending" ${rec.sla.taxApproval==='pending'?'selected':''}>Pending</option>
-              <option value="approved" ${rec.sla.taxApproval==='approved'?'selected':''}>Approved</option>
-              <option value="changes_required" ${rec.sla.taxApproval==='changes_required'?'selected':''}>Changes Required</option>
-            </select>
-          </td>
-          <td><button class="btn secondary" style="padding:6px 12px;font-size:11px;" ${rec.sla.tdsCalc!=='completed'?'disabled':''} onclick="sendTaxTeamEmail(${activeIndex})">${rec.sla.taxEmailSentAt?'Re-send Review Email':'Send Review Email'}</button></td>
-        </tr>
-        <tr>
-          <td>Tax Team Reminder</td>
-          <td>5:00 PM</td>
-          <td><span class="badge ${rec.sla.taxApproval!=='pending' ? 'status-closed' : (rec.sla.reminderSent?'status-active':'status-pending')}">${rec.sla.taxApproval!=='pending' ? 'NOT REQUIRED' : (rec.sla.reminderSent?'SENT':'PENDING')}</span></td>
-          <td><button class="btn secondary" style="padding:6px 12px;font-size:11px;" ${rec.sla.taxApproval!=='pending' || !rec.sla.taxEmailSentAt ?'disabled':''} onclick="sendTaxReminder(${activeIndex})">Send Reminder</button></td>
-        </tr>
-      </table>
-
-      <div class="callout" style="margin-top:18px;">
-        <b>Tax Team email preview:</b> "Employee's tentative TDS/FnF calculation is ready. Please review and confirm by EOD."
-      </div>
-      <div class="callout">
-        <b>Employee email preview:</b> "Please review and acknowledge your tentative FnF. Once acknowledged, the final FnF will be processed and payment will be initiated as per the defined timeline." (sent to official + personal email)
-      </div>
     </div>
 
     <hr class="divider">
