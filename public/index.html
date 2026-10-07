@@ -166,6 +166,14 @@ input:focus, select:focus{outline:2px solid var(--gold-bright);outline-offset:1p
 .ledger tr.net td{font-family:"Fraunces",serif;font-size:19px;padding-top:14px;}
 .ledger tr.net.pay td.num{color:var(--green);}
 .ledger tr.net.recover td.num{color:var(--red);}
+.row-pend td{background:#fff4ee;}
+.row-pend td:first-child{box-shadow:inset 3px 0 0 var(--red);}
+.pend-chip{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:10.5px;padding:3px 8px;border-radius:12px;margin:2px 4px 2px 0;background:var(--red-bg);color:var(--red);white-space:nowrap;}
+.pend-strip{display:flex;gap:12px;flex-wrap:wrap;margin:4px 0 18px;}
+.pend-pill{cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:10px 14px;background:#fff;font-size:13px;}
+.pend-pill b{font-family:"Fraunces",serif;font-size:20px;margin-right:6px;}
+.pend-pill.hot{border-color:var(--red);background:var(--red-bg);color:var(--red);}
+.pend-pill.active{outline:2px solid var(--navy);}
 .np-month{border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-bottom:10px;}
 .np-month summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:16px;font-weight:600;}
 .np-month summary::-webkit-details-marker{display:none;}
@@ -832,6 +840,7 @@ function kpiCard(key,label,value,tone,clickable=true,pct=null){
 }
 function renderOverview(){
   const t = totals();
+  const pc = pendencyCounts();
   const curQ = quarterOf(asOfDate);
   const opts = quarterOptions();
   return `
@@ -850,16 +859,56 @@ function renderOverview(){
       ${kpiCard('dueHr','FnF Due — Pending from HR', t.dueHr, 'blue')}
       ${kpiCard('doneWithin48','FnF Done — Within 48 Hours', t.doneWithin48, 'green', true, t.exits ? Math.round(t.doneWithin48/t.exits*100) : 0)}
       ${kpiCard('doneAfter48','FnF Done — After 48 Hours', t.doneAfter48, 'red', true, t.exits ? Math.round(t.doneAfter48/t.exits*100) : 0)}
-    </div>
+      ${kpiCard('pendAny','Employees with Pendency', pc.any, 'red')}
+      ${kpiCard('pendAccounts','Pending with Accounts (TDS)', pc.accounts, 'amber')}
+      ${kpiCard('pendPli','Pending with Monika (PLI)', pc.pli, 'amber')}    </div>
   </div>`;
 }
 
 /* ---------------- render: list ---------------- */
-const filterTitles = { all:'All Employees', exits:'All Employees (Total Resignation)', dueKite:'FnF Due — Pending from Kite', dueHr:'FnF Due — Pending from HR', doneWithin48:'FnF Done — Within 48 Hours', doneAfter48:'FnF Done — After 48 Hours' };
+// Open items that are blocking an employee's FnF: waiting on another team, or
+// the net payable still unpaid after the LWD has passed.
+function pendencies(rec){
+  const out = [];
+  const tds = rec.tdsReply && rec.tdsReply.status;
+  if(tds==='awaiting' || tds==='unclear') out.push({ key:'accounts', label: tds==='unclear' ? 'Accounts: TDS reply unclear' : 'Accounts: TDS awaited' });
+  if(isSalesEmployee(rec) && rec.pli && rec.pli.status==='shared') out.push({ key:'pli', label:'Monika (PLI): amount awaited' });
+  if(rec.lwd && asOfDate > rec.lwd && rec.payment && rec.payment.status!=='done' && settlementCalc(rec).netPayable > 0){
+    out.push({ key:'pay', label:`Net payable unpaid · ${daysBetween(rec.lwd, asOfDate)}d after LWD` });
+  }
+  return out;
+}
+function pendencyCounts(){
+  const c = { any:0, accounts:0, pli:0, pay:0 };
+  state.records.forEach(r=>{
+    const p = pendencies(r);
+    if(p.length) c.any++;
+    p.forEach(x=>c[x.key]++);
+  });
+  return c;
+}
+const PEND_FILTERS = { pendAny:null, pendAccounts:'accounts', pendPli:'pli', pendPay:'pay' };
+function pendStrip(active){
+  const c = pendencyCounts();
+  const pill = (key,label,n)=>`<div class="pend-pill ${n?'hot':''} ${active===key?'active':''}" onclick="openList('${key}')"><b>${n}</b>${label}</div>`;
+  return `<div class="pend-strip">
+    ${pill('pendAny','Employees with pendency',c.any)}
+    ${pill('pendAccounts','Pending with Accounts (TDS)',c.accounts)}
+    ${pill('pendPli','Pending with Monika (PLI)',c.pli)}
+    ${pill('pendPay','Net payable unpaid after LWD',c.pay)}
+  </div>`;
+}
+const filterTitles = { pendAny:'Employees with Pendency', pendAccounts:'Pending with Accounts (TDS)', pendPli:'Pending with Monika (PLI)', pendPay:'Net Payable Unpaid After LWD', all:'All Employees', exits:'All Employees (Total Resignation)', dueKite:'FnF Due — Pending from Kite', dueHr:'FnF Due — Pending from HR', doneWithin48:'FnF Done — Within 48 Hours', doneAfter48:'FnF Done — After 48 Hours' };
 function filteredRecords(){
   // 'all' is the general employee directory (top tab) — not quarter-scoped.
   // Every other filter comes from a KPI card, so it respects the selected quarter.
-  const r = listFilter==='all' ? state.records : recordsInSelectedQuarter();
+  // Pendency filters are about what is open right now, so they look across all records.
+  const isPend = listFilter in PEND_FILTERS;
+  const r = (listFilter==='all' || isPend) ? state.records : recordsInSelectedQuarter();
+  if(isPend){
+    const key = PEND_FILTERS[listFilter];
+    return r.filter(x=>{ const p = pendencies(x); return key ? p.some(i=>i.key===key) : p.length>0; });
+  }
   switch(listFilter){
     case 'dueKite': return r.filter(x=>fnfDueState(x)==='kite');
     case 'dueHr': return r.filter(x=>fnfDueState(x)==='hr');
@@ -870,6 +919,7 @@ function filteredRecords(){
 }
 function toggleLwdSort(){ listSortDir = listSortDir==='asc' ? 'desc' : 'asc'; render(); }
 function renderList(){
+  const quarterScoped = listFilter!=='all' && !(listFilter in PEND_FILTERS);
   const rows = filteredRecords().slice().sort((a,b)=>{
     if(!a.lwd && !b.lwd) return 0;
     if(!a.lwd) return 1;
@@ -878,20 +928,23 @@ function renderList(){
   });
   return `
   <div class="panel">
-    <div class="panel-head"><h2>${filterTitles[listFilter]||'Employees'}</h2><span class="frtag">${listFilter!=='all' ? quarterOf(asOfDate).label + ' · ' : ''}${rows.length} record(s)</span></div>
-    <div class="panel-sub">${listFilter!=='all' ? `Filtered to ${quarterOf(asOfDate).label} (by LWD). ` : ''}Summary view only — open a name to see the full consolidated record.</div>
+    <div class="panel-head"><h2>${filterTitles[listFilter]||'Employees'}</h2><span class="frtag">${quarterScoped ? quarterOf(asOfDate).label + ' · ' : ''}${rows.length} record(s)</span></div>
+    ${pendStrip(listFilter)}
+    <div class="panel-sub">${quarterScoped ? `Filtered to ${quarterOf(asOfDate).label} (by LWD). ` : ''}Highlighted rows have an open pendency. Summary view only — open a name to see the full consolidated record.</div>
     <table class="ledger queue-table">
-      <tr><th>EmpCode</th><th>Name</th><th>Department</th><th>Location</th><th style="cursor:pointer;user-select:none;" onclick="toggleLwdSort()">LWD ${listSortDir==='asc'?'↑':'↓'}</th><th>Status</th><th>SLA</th><th></th></tr>
+      <tr><th>EmpCode</th><th>Name</th><th>Department</th><th>Location</th><th style="cursor:pointer;user-select:none;" onclick="toggleLwdSort()">LWD ${listSortDir==='asc'?'↑':'↓'}</th><th>Status</th><th>SLA</th><th>Pendency</th><th></th></tr>
       ${rows.map((rec)=>{
         const i = state.records.indexOf(rec);
         const st = recStatus(rec);
         const sla = recSla(rec);
-        return `<tr>
+        const pend = pendencies(rec);
+        return `<tr class="${pend.length?'row-pend':''}">
           <td>${rec.empId||'—'}</td>
           <td><a href="javascript:void(0)" onclick="openRecord(${i})" style="color:var(--navy);font-weight:600;text-decoration:none;">${rec.name||'(unnamed)'}</a></td>
           <td>${rec.department||'—'}</td><td>${rec.location||'—'}</td><td>${rec.lwd||'—'}</td>
           <td><span class="badge status-${st}">${st.toUpperCase()}</span></td>
           <td><span class="badge sla-${sla.state}">${sla.label}</span></td>
+          <td>${pend.map(p=>`<span class="pend-chip">${p.label}</span>`).join('') || '—'}</td>
           <td><button class="btn gold" style="padding:6px 12px;font-size:11px;" onclick="openRecord(${i})">Open →</button></td>
         </tr>`;
       }).join('')}
