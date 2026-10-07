@@ -14,6 +14,7 @@ const { calc, recStatus, recSla, settlementCalc, settlementMonthLabels, computeT
 const pms = require('./lib/pms');
 const outlook = require('./lib/outlook');
 const { parseTdsReply } = require('./lib/tds-reply');
+const { classifyAck } = require('./lib/ack-reply');
 
 const SENDER_UPN = process.env.OUTLOOK_SENDER_UPN;
 const PAYMENT_CONTACT_UPN = process.env.OUTLOOK_PAYMENT_CONTACT_UPN;
@@ -283,6 +284,135 @@ async function runPliSharing() {
   }
 }
 
+// ---- Acknowledgement tracking on the initial FnF email thread ----
+// Everything keys off the conversation of the initial email: the employee's
+// clear "accepted/acknowledged" reply in that thread, one reminder sent as a
+// reply in that same thread after ACK_REMINDER_HOURS, and one forward of that
+// initial email to the payment contact (Bhargavi). Other threads never trigger.
+const ACK_REMINDER_HOURS = Number(process.env.ACK_REMINDER_HOURS) || 24;
+const ackBusy = new Set(); // guards against two overlapping checks sending duplicates
+
+function ackReminderHtml(rec) {
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;color:#0a1f3a;">
+    <p>Dear ${rec.name || 'Employee'},</p>
+    <p>This is a gentle reminder about your Full &amp; Final settlement sheet shared below. Please review it and reply to this email confirming your acknowledgement.</p>
+    <p>Regards,<br/>HR Operations</p>
+  </div><hr/>`;
+}
+
+// Hands the settlement to the payment contact exactly once — as a forward of the
+// initial FnF email (original stays quoted underneath), with Payment Done / Not
+// Done buttons. Used for both the emailed acknowledgement and the review-link approval.
+async function notifyPaymentContact(rec, baseUrl) {
+  const key = `pay:${rec.id}`;
+  if (ackBusy.has(key)) return false;
+  ackBusy.add(key);
+  try {
+    const current = await store.getRecord(rec.id);
+    if (current.ackTracking.bhargaviNotifiedAt) return false;
+
+    const paymentToken = crypto.randomBytes(16).toString('hex');
+    await store.updateRecord(rec.id, { payment: { status: 'pending', responseToken: paymentToken, respondedAt: '' } });
+    const upd = await store.getRecord(rec.id);
+    const t = upd.ackTracking;
+    const subject = `FnF Approved — (${employeeSubjectTag(upd)})`;
+    const html = paymentEmailHtml(upd, baseUrl);
+
+    let ownId = null;
+    if (t.conversationId) {
+      const root = await outlook.findRootMessage(SENDER_UPN, t.conversationId);
+      if (root) {
+        ownId = (await outlook.forwardMessage({ mailboxUpn: SENDER_UPN, messageId: root.id, to: PAYMENT_CONTACT_UPN, subject, commentHtml: html })).internetMessageId;
+      }
+    }
+    if (!ownId) await outlook.sendMail({ fromUpn: SENDER_UPN, to: PAYMENT_CONTACT_UPN, subject, html });
+
+    await store.updateRecord(rec.id, {
+      ackTracking: {
+        bhargaviNotifiedAt: new Date().toISOString(),
+        status: t.status === 'not_tracked' ? 'not_tracked' : 'sent_to_bhargavi',
+        ownMessageIds: ownId ? [...t.ownMessageIds, ownId] : t.ownMessageIds,
+      },
+    });
+    return true;
+  } finally {
+    ackBusy.delete(key);
+  }
+}
+
+async function processAckTracking(rec) {
+  const key = `ack:${rec.id}`;
+  if (ackBusy.has(key)) return;
+  ackBusy.add(key);
+  try {
+    let t = rec.ackTracking;
+    if (!t.conversationId || !['awaiting', 'reminder_sent', 'acknowledged'].includes(t.status)) return;
+    const reload = async () => (await store.getRecord(rec.id)).ackTracking;
+
+    // 1. Has the employee clearly acknowledged, in this thread?
+    if (t.status !== 'acknowledged') {
+      const employee = t.employeeEmail.toLowerCase();
+      const own = new Set(t.ownMessageIds);
+      const seen = new Set(t.seenMessageIds);
+      const messages = await outlook.listConversation(SENDER_UPN, t.conversationId);
+      const replies = messages
+        .filter((m) => ((m.from && m.from.emailAddress && m.from.emailAddress.address) || '').toLowerCase() === employee
+          && !own.has(m.internetMessageId) && new Date(m.receivedDateTime) > new Date(t.sentAt))
+        .sort((a, b) => new Date(a.receivedDateTime) - new Date(b.receivedDateTime));
+
+      let ack = null;
+      const notAck = [];
+      for (const m of replies) {
+        if (seen.has(m.id)) continue; // already read and judged not an acknowledgement
+        const text = await outlook.getUniqueBodyText(SENDER_UPN, m.id);
+        if (classifyAck(text) === 'ack') { ack = text; break; }
+        notAck.push(m.id);
+      }
+      if (ack) {
+        const at = new Date().toISOString();
+        await store.updateRecord(rec.id, {
+          ackTracking: { status: 'acknowledged', acknowledgedAt: at, ackPreview: ack.trim().replace(/\s+/g, ' ').slice(0, 160), lastCheckedAt: at },
+          sheetApproval: { status: 'approved', respondedAt: at.slice(0, 10) },
+          ack: { shared: true, acknowledged: true },
+        });
+      } else {
+        await store.updateRecord(rec.id, { ackTracking: { seenMessageIds: [...t.seenMessageIds, ...notAck], lastCheckedAt: new Date().toISOString() } });
+      }
+      t = await reload();
+    }
+
+    // 2. No acknowledgement within the window: one reminder, as a reply on the initial thread.
+    if (t.status === 'awaiting' && !t.reminderSentAt && Date.now() - new Date(t.sentAt).getTime() >= ACK_REMINDER_HOURS * 3600 * 1000) {
+      const root = await outlook.findRootMessage(SENDER_UPN, t.conversationId);
+      if (root) {
+        const reminder = await outlook.replyInThread({ mailboxUpn: SENDER_UPN, messageId: root.id, to: t.employeeEmail, commentHtml: ackReminderHtml(rec) });
+        await store.updateRecord(rec.id, {
+          ackTracking: { status: 'reminder_sent', reminderSentAt: new Date().toISOString(), ownMessageIds: [...t.ownMessageIds, reminder.internetMessageId] },
+        });
+        t = await reload();
+      }
+    }
+
+    // 3. Acknowledged: tell Bhargavi once, via the initial email.
+    if (t.status === 'acknowledged' && !t.bhargaviNotifiedAt) {
+      await notifyPaymentContact(await store.getRecord(rec.id), PUBLIC_BASE_URL);
+    }
+  } finally {
+    ackBusy.delete(key);
+  }
+}
+
+async function runAckTracking() {
+  try {
+    for (const rec of await store.listRecords()) {
+      if (!rec.ackTracking || !['awaiting', 'reminder_sent', 'acknowledged'].includes(rec.ackTracking.status)) continue;
+      try { await processAckTracking(rec); } catch (err) { console.error(`Ack tracking failed for ${rec.name}:`, err.message); }
+    }
+  } catch (err) {
+    console.error('Ack tracking run failed:', err.message);
+  }
+}
+
 function tdsSubject(rec) {
   return `TDS: ${rec.name || ''} (${rec.empId || ''})`;
 }
@@ -418,6 +548,7 @@ async function handleApi(req, res, urlPath) {
       // browser copy must never overwrite them with its older view.
       delete body.pli;
       delete body.tdsReply;
+      delete body.ackTracking;
       const rec = await store.updateRecord(id, body);
       if (!rec) return sendJson(res, 404, { error: 'Not found' }), true;
       // The PLI contact's confirmed amount is the final Incentives figure.
@@ -454,15 +585,35 @@ async function handleApi(req, res, urlPath) {
     const proto = req.headers['x-forwarded-proto'] || 'http';
     const baseUrl = `${proto}://${req.headers.host}`;
 
-    await outlook.sendMail({
+    // Sent as a tracked message: its conversation is the one reference for the
+    // acknowledgement, 24h reminder and the hand-off to the payment contact.
+    const sentAtIso = new Date().toISOString();
+    const sent = await outlook.sendMailTracked({
       fromUpn: SENDER_UPN,
       to: updated.personalEmail,
       cc: SENDER_UPN,
       subject: `Full & Final Settlement — (${employeeSubjectTag(updated)})`,
       html: approvalEmailHtml(updated, baseUrl),
     });
+    await store.updateRecord(id, {
+      ackTracking: {
+        status: 'awaiting', conversationId: sent.conversationId, employeeEmail: updated.personalEmail,
+        sentAt: sentAtIso, reminderSentAt: '', acknowledgedAt: '', ackPreview: '', bhargaviNotifiedAt: '',
+        ownMessageIds: [sent.internetMessageId], seenMessageIds: [], lastCheckedAt: '',
+      },
+    });
 
-    sendJson(res, 200, withDerived(updated));
+    sendJson(res, 200, withDerived(await store.getRecord(id)));
+    return true;
+  }
+
+  // Looks at the initial FnF thread now (the dashboard and the background job both call this).
+  const checkAckMatch = urlPath.match(/^\/api\/records\/(\d+)\/check-ack$/);
+  if (checkAckMatch && req.method === 'POST') {
+    const rec = await store.getRecord(checkAckMatch[1]);
+    if (!rec) return sendJson(res, 404, { error: 'Not found' }), true;
+    await processAckTracking(rec);
+    sendJson(res, 200, withDerived(await store.getRecord(rec.id)));
     return true;
   }
 
@@ -647,17 +798,8 @@ async function handleApi(req, res, urlPath) {
     }
 
     if (action === 'approve') {
-      const paymentToken = crypto.randomBytes(16).toString('hex');
-      await store.updateRecord(id, { payment: { status: 'pending', responseToken: paymentToken, respondedAt: '' } });
-      const updatedForPayment = await store.getRecord(id);
       const proto = req.headers['x-forwarded-proto'] || 'http';
-      const baseUrl = `${proto}://${req.headers.host}`;
-      await outlook.sendMail({
-        fromUpn: SENDER_UPN,
-        to: PAYMENT_CONTACT_UPN,
-        subject: `FnF Approved — (${employeeSubjectTag(updatedForPayment)})`,
-        html: paymentEmailHtml(updatedForPayment, baseUrl),
-      });
+      await notifyPaymentContact(await store.getRecord(id), `${proto}://${req.headers.host}`);
     } else {
       await outlook.sendMail({
         fromUpn: SENDER_UPN,
@@ -815,6 +957,7 @@ if (require.main === module) {
     // Local/long-running only: serverless hosts need a scheduled job instead.
     setTimeout(runPliSharing, 30 * 1000);
     setInterval(runPliSharing, 30 * 60 * 1000);
+    setInterval(runAckTracking, 5 * 60 * 1000);
   });
 }
 

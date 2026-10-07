@@ -516,6 +516,11 @@ let activeSection = "sec-resignation";
 let visitedSections = new Set(["sec-resignation"]);
 
 /* ---------------- TDS & FnF SLA workflow actions ---------------- */
+function setAssetIssued(i, val){
+  const d = state.records[i].dues;
+  d.dcTeam = Object.assign({}, d.dcTeam, { assetIssued: val });
+  render();
+}
 function runTdsCalc(i){ state.records[i].sla.tdsCalc = 'completed'; render(); }
 function sendTaxTeamEmail(i){ state.records[i].sla.taxEmailSentAt = asOfDate; render(); }
 function sendTaxReminder(i){ state.records[i].sla.reminderSent = true; render(); }
@@ -650,6 +655,57 @@ async function sendApprovalEmail(i){
     alert('Failed to send approval email: ' + e.message);
   }
 }
+
+/* ---------------- acknowledgement tracking (initial FnF email thread) ---------------- */
+const ACK_STEPS = [
+  ['awaiting','Awaiting Acknowledgement'],
+  ['reminder_sent','Reminder Sent'],
+  ['acknowledged','Acknowledged'],
+  ['sent_to_bhargavi','Sent to Bhargavi'],
+];
+function fmtStamp(iso){ return iso ? new Date(iso).toLocaleString('en-IN',{dateStyle:'medium',timeStyle:'short'}) : ''; }
+function ackTrackingHtml(rec){
+  const t = rec.ackTracking;
+  if(!t || t.status==='not_tracked') return '';
+  const cur = ACK_STEPS.findIndex(s=>s[0]===t.status);
+  const lines = [
+    t.sentAt ? `Initial FnF email sent ${fmtStamp(t.sentAt)}` : '',
+    t.reminderSentAt ? `Reminder sent on the same thread ${fmtStamp(t.reminderSentAt)}` : '',
+    t.acknowledgedAt ? `Acknowledged ${fmtStamp(t.acknowledgedAt)}${t.ackPreview ? ` — “${t.ackPreview}”` : ''}` : '',
+    t.bhargaviNotifiedAt ? `Sent to Bhargavi ${fmtStamp(t.bhargaviNotifiedAt)}` : '',
+  ].filter(Boolean);
+  return `<div style="margin-top:14px;">
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-soft);margin-bottom:8px;">Acknowledgement tracking — initial FnF email</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      ${ACK_STEPS.map((s,i)=>`<span class="badge ${i===cur?'status-active':(i<cur?'status-closed':'sla-upcoming')}" style="${i===cur?'outline:2px solid var(--navy);':''}">${i<cur?'✓ ':''}${s[1]}</span>`).join('')}
+    </div>
+    <div class="panel-sub" style="margin:8px 0 0;">${lines.join('<br>')}</div>
+  </div>`;
+}
+// Asks the server to look at each tracked thread (reminder / acknowledgement / hand-off to Bhargavi),
+// whichever view is open, and pulls the result back in.
+let ackPolling = false;
+async function pollAckTracking(){
+  if(ackPolling) return;
+  ackPolling = true;
+  try{
+    for(const rec of state.records){
+      const s = rec.ackTracking && rec.ackTracking.status;
+      if(s!=='awaiting' && s!=='reminder_sent' && s!=='acknowledged') continue;
+      const r = await fetch(`/api/records/${rec.id}/check-ack`, { method:'POST' });
+      if(!r.ok) continue;
+      const fresh = await r.json();
+      if(JSON.stringify(fresh.ackTracking) === JSON.stringify(rec.ackTracking)) continue;
+      rec.ackTracking = fresh.ackTracking;
+      rec.sheetApproval = fresh.sheetApproval;
+      rec.ack = fresh.ack;
+      rec.payment = fresh.payment;
+      render();
+    }
+  }catch(e){ /* try again next tick */ }
+  finally{ ackPolling = false; }
+}
+setInterval(pollAckTracking, 60000);
 
 /* ---------------- render: tabbar ---------------- */
 function renderTabbar(){
@@ -993,6 +1049,7 @@ function renderDetail(){
   const sla = recSla(rec);
   // §5 salary components show real values only where TDS applies (same rule and
   // formulas as the Accounts TDS sheet); otherwise they stay at 0.
+  const assetIssued = (rec.dues.dcTeam && rec.dues.dcTeam.assetIssued) || 'No';
   const tdsOn = isTdsApplicable(rec);
   const tdsGross = tdsOn ? (Number(rec.comp.grossSalary) || 0) : 0;
   const tdsBasic = Math.round(tdsGross / 2);
@@ -1075,8 +1132,11 @@ function renderDetail(){
           ${field(`<label>WFH Balance <span class="fr">FR-2.3 — negative = deduct</span></label>`, `<input type="number" value="${rec.dues.wfh.balance}" oninput="state.records[${activeIndex}].dues.wfh.balance=this.value;render()">`)}
         </div>
         <div class="dues-card">
-          <h4>Loan &amp; Advance <span class="badge flag">FR-3.9</span></h4>
-          ${field(`<label>Outstanding recovery</label>`, `<input type="number" value="${rec.dues.loanAdvance.amount}" oninput="state.records[${activeIndex}].dues.loanAdvance.amount=this.value;render()">`)}
+          <h4>DC Team</h4>
+          ${field(`<label>Any Asset Issued</label>`, `<select onchange="setAssetIssued(${activeIndex}, this.value)">
+              <option value="No" ${assetIssued!=='Yes'?'selected':''}>No</option>
+              <option value="Yes" ${assetIssued==='Yes'?'selected':''}>Yes</option>
+            </select>`)}
         </div>
         <div class="dues-card">
           <h4>FnF Due Status</h4>
@@ -1270,6 +1330,8 @@ function renderDetail(){
 
       ${rec.emailSentDate ? `<div class="callout success" style="margin-top:18px;"><b>Email sent</b> to ${rec.personalEmail||rec.contact||'employee'} on ${rec.emailSentDate}. LWD → email gap: ${daysBetween(rec.lwd, rec.emailSentDate)} day(s).</div>` : `<div class="callout" style="margin-top:18px;">Not yet sent to the employee. Target: within 2 days of LWD (${rec.lwd||'LWD not set'}).</div>`}
 
+      ${ackTrackingHtml(rec)}
+
       <div class="field-grid" style="margin-top:14px;">
         ${field(`<label>Employee's Personal Email <span class="fr">required to send</span></label>`, `<input type="text" value="${rec.personalEmail||''}" placeholder="name@personal-provider.com" oninput="state.records[${activeIndex}].personalEmail=this.value" onblur="render()">`)}
       </div>
@@ -1364,11 +1426,13 @@ async function pollActiveRecord(){
     // leaves any in-progress HR edits (settlement figures, etc.) alone.
     const changed = JSON.stringify(fresh.ack) !== JSON.stringify(rec.ack)
       || JSON.stringify(fresh.sheetApproval) !== JSON.stringify(rec.sheetApproval)
-      || JSON.stringify(fresh.payment) !== JSON.stringify(rec.payment);
+      || JSON.stringify(fresh.payment) !== JSON.stringify(rec.payment)
+      || JSON.stringify(fresh.ackTracking) !== JSON.stringify(rec.ackTracking);
     if(changed){
       rec.ack = fresh.ack;
       rec.sheetApproval = fresh.sheetApproval;
       rec.payment = fresh.payment;
+      rec.ackTracking = fresh.ackTracking;
       lastSynced[rec.id] = JSON.stringify(rec);
       render();
     }
