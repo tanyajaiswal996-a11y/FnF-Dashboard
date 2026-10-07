@@ -911,7 +911,6 @@ function renderOverview(){
       ${kpiCard('dueHr','FnF Due — Pending from HR', t.dueHr, 'blue')}
       ${kpiCard('doneWithin48','FnF Done — Within 48 Hours', t.doneWithin48, 'green', true, t.exits ? Math.round(t.doneWithin48/t.exits*100) : 0)}
       ${kpiCard('doneAfter48','FnF Done — After 48 Hours', t.doneAfter48, 'red', true, t.exits ? Math.round(t.doneAfter48/t.exits*100) : 0)}
-      ${kpiCard('pendAny','Employees with Pendency', pc.any, 'red')}
       ${kpiCard('pendAccounts','Pending with Accounts (TDS)', pc.accounts, 'amber')}
       ${kpiCard('pendPli','Pending with Monika (PLI)', pc.pli, 'amber')}    </div>
   </div>`;
