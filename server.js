@@ -185,8 +185,28 @@ function pliContacts() {
   return (process.env.PLI_CONTACT_UPN || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+// The PLI link is signed (HMAC of the employee code), not looked up in server
+// memory: any server instance — or one freshly restarted — can verify it, so a
+// link never goes 'invalid' just because the server forgot it. It is keyed by
+// employee code because record ids are not stable across restarts.
+function linkSecret() {
+  const secret = process.env.LINK_SIGNING_SECRET || process.env.OUTLOOK_CLIENT_SECRET;
+  if (!secret) throw new Error('LINK_SIGNING_SECRET is not configured');
+  return secret;
+}
+
+function pliToken(empId) {
+  return crypto.createHmac('sha256', linkSecret()).update(`pli:${empId}`).digest('hex').slice(0, 32);
+}
+
+function pliTokenValid(empId, token) {
+  const expected = Buffer.from(pliToken(empId));
+  const given = Buffer.from(String(token || ''));
+  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
+}
+
 function pliLink(rec) {
-  return `${PUBLIC_BASE_URL}/api/pli/${rec.id}?token=${rec.pli.token}`;
+  return `${PUBLIC_BASE_URL}/api/pli/emp/${encodeURIComponent(rec.empId)}?token=${pliToken(rec.empId)}`;
 }
 
 function pliDetailsTable(rec) {
@@ -249,10 +269,68 @@ function parsePliAmount(raw) {
   return Number.isFinite(n) ? n : null;
 }
 
+// PLI status and the amount live in Outlook, not in server memory (which differs
+// per server instance and resets on restart). Two kinds of mail are the record:
+//   - Sent Items "PLI amount needed: Name (Code) …"   -> details were shared
+//   - Inbox      "PLI amount confirmed: Name (Code)"  -> the confirmed amount,
+//     sent by this app to HR when the PLI contact submits; only mail from the
+//     app's own mailbox counts, so nobody else can set an amount.
+// Applied to the in-memory records at most every 20s per server instance.
+const PLI_SYNC_MS = 20 * 1000;
+let pliSyncAt = 0;
+let pliSyncing = null;
+
+function codeFromSubject(subject) {
+  const m = /\(([^()]+)\)/.exec(subject || '');
+  return m ? m[1].trim() : '';
+}
+
+function syncPliFromMailbox(force) {
+  if (!force && Date.now() - pliSyncAt < PLI_SYNC_MS) return Promise.resolve();
+  if (pliSyncing) return pliSyncing;
+  pliSyncing = (async () => {
+    try {
+      const records = await store.listRecords();
+      const byCode = new Map(records.filter(isSalesEmployee).map((r) => [String(r.empId), r]));
+
+      const shared = await outlook.listBySubjectPrefix(SENDER_UPN, 'sentitems', 'PLI amount needed:');
+      for (const m of shared) {
+        const rec = byCode.get(codeFromSubject(m.subject));
+        if (rec && rec.pli.status === 'not_shared') {
+          await store.updateRecord(rec.id, { pli: { status: 'shared', sharedAt: m.sentDateTime } });
+        }
+      }
+
+      const confirmed = await outlook.listBySubjectPrefix(SENDER_UPN, 'inbox', 'PLI amount confirmed:');
+      const done = new Set();
+      for (const m of confirmed) { // newest first: the first per employee is the latest
+        const from = ((m.from && m.from.emailAddress && m.from.emailAddress.address) || '').toLowerCase();
+        const code = codeFromSubject(m.subject);
+        const rec = byCode.get(code);
+        const amountMatch = /PLI-AMOUNT:\s*([\d.]+)/.exec(m.bodyPreview || '');
+        if (!rec || done.has(code) || from !== SENDER_UPN.toLowerCase() || !amountMatch) continue;
+        done.add(code);
+        const amount = Number(amountMatch[1]);
+        if (rec.pli.status === 'submitted' && rec.pli.submittedAt === m.receivedDateTime) continue;
+        await store.updateRecord(rec.id, {
+          pli: { status: 'submitted', amount, submittedAt: m.receivedDateTime },
+          settlement: { earnings: { incentives: amount } },
+          comp: { pli: amount },
+        });
+      }
+    } catch (err) {
+      console.error('PLI mailbox sync failed:', err.message);
+    } finally {
+      pliSyncAt = Date.now();
+      pliSyncing = null;
+    }
+  })();
+  return pliSyncing;
+}
+
 async function sharePli(rec) {
   const to = pliContacts();
   if (!to.length) throw new Error('PLI_CONTACT_UPN is not configured');
-  if (!rec.pli.token) rec.pli.token = crypto.randomBytes(24).toString('hex');
   await outlook.sendMail({
     fromUpn: SENDER_UPN,
     to,
@@ -260,7 +338,7 @@ async function sharePli(rec) {
     html: pliEmailHtml(rec),
   });
   await store.updateRecord(rec.id, {
-    pli: { token: rec.pli.token, sharedAt: new Date().toISOString(), status: rec.pli.status === 'submitted' ? 'submitted' : 'shared' },
+    pli: { sharedAt: new Date().toISOString(), status: rec.pli.status === 'submitted' ? 'submitted' : 'shared' },
   });
   return to;
 }
@@ -271,6 +349,7 @@ async function runPliSharing() {
   if (!pliContacts().length) return;
   const today = new Date().toISOString().slice(0, 10);
   try {
+    await syncPliFromMailbox(true); // learn what was already sent, so nobody is mailed twice
     for (const rec of await store.listRecords()) {
       if (!isSalesEmployee(rec) || rec.pli.status !== 'not_shared') continue;
       if (!pliShareWindow(rec, today).windowOpen) continue;
@@ -520,6 +599,7 @@ async function handleApi(req, res, urlPath) {
 
   if (urlPath === '/api/records' && req.method === 'GET') {
     const records = await store.listRecords();
+    await syncPliFromMailbox();
     sendJson(res, 200, records.map((r) => Object.assign(withDerived(r), { sla: Object.assign({}, r.sla, { window: recSla(r, asOf) }) })));
     return true;
   }
@@ -535,6 +615,7 @@ async function handleApi(req, res, urlPath) {
   if (singleMatch) {
     const id = singleMatch[1];
     if (req.method === 'GET') {
+      await syncPliFromMailbox();
       const rec = await store.getRecord(id);
       if (!rec) return sendJson(res, 404, { error: 'Not found' }), true;
       sendJson(res, 200, Object.assign(withDerived(rec), { sla: Object.assign({}, rec.sla, { window: recSla(rec, asOf) }) }));
@@ -676,13 +757,15 @@ async function handleApi(req, res, urlPath) {
   }
 
   // The PLI contact's token-gated page: details only (no salary), one amount field.
-  const pliPageMatch = urlPath.match(/^\/api\/pli\/(\d+)$/);
+  const pliPageMatch = urlPath.match(/^\/api\/pli\/emp\/([^/]+)$/);
   if (pliPageMatch) {
-    const rec = await store.getRecord(pliPageMatch[1]);
+    const empCode = pliPageMatch[1];
+    await syncPliFromMailbox(); // so the page shows the latest recorded amount, on any server instance
+    const rec = (await store.listRecords()).find((r) => String(r.empId) === empCode && isSalesEmployee(r));
     const q = new URL(req.url, `http://${req.headers.host}`).searchParams;
     const body = req.method === 'POST' ? await readBody(req) : {};
     const token = req.method === 'POST' ? body.token : q.get('token');
-    const valid = rec && rec.pli.token && token === rec.pli.token;
+    const valid = !!rec && pliTokenValid(rec.empId, token);
 
     if (req.method === 'GET') {
       res.writeHead(valid ? 200 : 403, { 'Content-Type': 'text/html' });
@@ -693,6 +776,20 @@ async function handleApi(req, res, urlPath) {
       if (!valid) return sendJson(res, 403, { error: 'This PLI link is invalid or has expired.' }), true;
       const amount = parsePliAmount(body.amount);
       if (amount == null) return sendJson(res, 400, { error: 'Enter a valid amount, or 0 / NIL if there is no PLI.' }), true;
+      // The confirmation email is the durable record (see syncPliFromMailbox) — if it
+      // can't be sent, say so rather than report a save that another server would never see.
+      try {
+        await outlook.sendMail({
+          fromUpn: SENDER_UPN,
+          to: SENDER_UPN,
+          subject: `PLI amount confirmed: ${rec.name || ''} (${rec.empId})`,
+          html: `<p>PLI-AMOUNT: ${amount} | EMP: ${rec.empId}</p>
+            <p>The PLI contact confirmed the final PLI / incentive for ${rec.name || ''} (${rec.empId}) as <b>${amount === 0 ? 'NIL (0)' : fmtInr(amount)}</b>. It is applied to the Incentives line of the FnF sheet automatically.</p>`,
+        });
+      } catch (err) {
+        console.error('PLI confirmation mail failed:', err.message);
+        return sendJson(res, 502, { error: 'Could not save the amount right now. Please try again in a minute.' }), true;
+      }
       await store.updateRecord(rec.id, {
         pli: { status: 'submitted', amount, submittedAt: new Date().toISOString() },
         settlement: { earnings: { incentives: amount } },
