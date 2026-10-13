@@ -504,7 +504,7 @@ function inr0(n) {
 function tdsCalcHtml(tds, failedMonths) {
   if (!tds.applicable) {
     return `<div style="margin-top:28px;padding:14px 16px;border:1px solid #cfe0f0;border-radius:6px;background:#f4f9fe;font-size:13px;">
-      <b>TDS calculation not required.</b> No TDS was deducted from this employee's Net Payable in ${tds.previousMonth || 'the previous month'}.
+      <b>TDS calculation not required.</b> No TDS was deducted from this employee's Net Payable in ${tds.previousMonth || 'the previous month'}${tds.priorMonth ? ` or ${tds.priorMonth}` : ''}.
     </div>`;
   }
   const th = 'padding:6px 10px;border:1px solid #cfe0f0;background:#eef5fc;font-weight:600;white-space:nowrap;text-align:right;';

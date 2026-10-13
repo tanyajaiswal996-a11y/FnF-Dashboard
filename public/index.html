@@ -379,7 +379,7 @@ function computeSalarySplit(grossSalary, dor, lwd, workingDays, presentDays){
 // TDS applies only if TDS was deducted from Net Payable in the month before LWD's month.
 function isTdsApplicable(rec){
   const prev = rec.settlement && rec.settlement.previousMonthDues;
-  return !!(rec.lwd && prev && Number(prev.tds) > 0);
+  return !!(rec.lwd && prev && (Number(prev.tds) > 0 || Number(prev.priorTds) > 0));
 }
 function daysBetween(a,b){ return Math.round((new Date(b) - new Date(a)) / 86400000); }
 function shiftDate(dateStr, days){
@@ -721,7 +721,11 @@ function teamColumns(team){
   ];
   if(team==='accounts'){
     return base.concat([
-      { label:'TDS', render:r=>isTdsApplicable(r) ? `Applicable (${fmt(Number(r.settlement.previousMonthDues.tds)||0)} last month)` : 'Not applicable' },
+      { label:'TDS', render:r=>{
+        if(!isTdsApplicable(r)) return 'Not applicable';
+        const p = r.settlement.previousMonthDues;
+        return Number(p.tds)>0 ? `Applicable (${fmt(Number(p.tds))} in ${p.month})` : `Applicable (${fmt(Number(p.priorTds))} in ${p.priorMonth})`;
+      } },
       { label:'FnF Sheet with TDS', render:r=>`<a href="javascript:void(0)" onclick="openAccountsSheet(${r.id})" style="color:var(--navy);font-weight:600;">${accountsSheetId===r.id?'Viewing ↓':'View Sheet →'}</a>` },
     ]);
   }
@@ -1224,6 +1228,8 @@ function renderDetail(){
         <tr><td>HRA (50% of Basic)</td><td class="num">${fmt(tdsHra)}</td></tr>
         <tr><td>Other Allowances (Gross − Basic − HRA)</td><td class="num">${fmt(tdsOther)}</td></tr>
         <tr class="subtotal"><td>Previous Month TDS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.tds) || 0)}</td></tr>
+        ${(()=>{ const p = rec.settlement.previousMonthDues || {}; return !(Number(p.tds)>0) && Number(p.priorTds)>0
+          ? `<tr class="subtotal"><td>Last TDS deducted — ${p.priorMonth} <span class="fr">none in ${p.month || 'the previous month'} (stops after resignation)</span></td><td class="num">${fmt(Number(p.priorTds))}</td></tr>` : ''; })()}
         <tr class="subtotal"><td>Previous Month NPS <span class="fr">via PMS Net Payable Details</span></td><td class="num">${fmt((rec.settlement.previousMonthDues && rec.settlement.previousMonthDues.nps) || 0)}</td></tr>
       </table>
     </div>
