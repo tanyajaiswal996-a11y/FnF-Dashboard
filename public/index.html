@@ -279,7 +279,6 @@ footer.foot{max-width:1280px;margin:0 auto;padding:18px 42px 40px;font-family:"I
 async function apiList(){ const r = await fetch('/api/records?asOf=' + asOfDate); return r.json(); }
 async function apiPatch(id, patch){ const r = await fetch('/api/records/' + id, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch)}); return r.json(); }
 async function apiCreate(seed){ const r = await fetch('/api/records', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(seed||{})}); return r.json(); }
-async function apiDelete(id){ await fetch('/api/records/' + id, {method:'DELETE'}); }
 
 let syncTimer = null;
 let lastSynced = {};
@@ -532,13 +531,6 @@ async function addRecord(){
   state.records.push(rec);
   activeIndex = state.records.length-1;
   lastSynced[rec.id] = JSON.stringify(rec);
-  render();
-}
-async function removeRecord(i){
-  const rec = state.records[i];
-  await apiDelete(rec.id);
-  state.records.splice(i,1);
-  if(activeIndex>=state.records.length) activeIndex=state.records.length-1;
   render();
 }
 
@@ -1059,7 +1051,6 @@ function renderDetail(){
         ${state.records.map((x,i)=>`<option value="${i}" ${i===activeIndex?'selected':''}>${x.name||'(unnamed)'} — ${x.empId||'no id'}</option>`).join('')}
       </select>
       <button class="btn secondary" style="padding:8px 14px;font-size:11px;" onclick="refreshRecords()">↻ Refresh</button>
-      <button class="btn secondary" style="padding:8px 14px;font-size:11px;" onclick="removeRecord(${activeIndex})">Remove This Record</button>
     </div>
 
     <div class="emp-header">
