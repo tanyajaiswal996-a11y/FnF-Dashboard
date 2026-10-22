@@ -10,11 +10,12 @@ const path = require('path');
 const crypto = require('crypto');
 const { URL } = require('url');
 const store = require('./lib/store');
-const { calc, recStatus, recSla, settlementCalc, settlementMonthLabels, computeTdsCalc, isSalesEmployee, pliShareWindow } = require('./lib/calc');
+const { calc, recStatus, recSla, settlementCalc, settlementMonthLabels, computeTdsCalc, isSalesEmployee, pliShareWindow, isTdsApplicable } = require('./lib/calc');
 const pms = require('./lib/pms');
 const outlook = require('./lib/outlook');
 const { parseTdsReply } = require('./lib/tds-reply');
 const { classifyAck } = require('./lib/ack-reply');
+const auth = require('./lib/auth');
 
 const SENDER_UPN = process.env.OUTLOOK_SENDER_UPN;
 const PAYMENT_CONTACT_UPN = process.env.OUTLOOK_PAYMENT_CONTACT_UPN;
@@ -597,6 +598,40 @@ function responsePageHtml(title, message) {
 async function handleApi(req, res, urlPath) {
   const asOf = new URL(req.url, `http://${req.headers.host}`).searchParams.get('asOf') || new Date().toISOString().slice(0, 10);
 
+  if (urlPath === '/api/me' && req.method === 'GET') {
+    const u = req.user;
+    sendJson(res, 200, { email: u.email, name: u.name, role: u.role, signInRequired: auth.authRequired() });
+    return true;
+  }
+
+  // The Accounts team's work queue: only employees whose TDS applies, with identity
+  // and the TDS reference — their FnF sheet and TDS calculation open from here.
+  if (urlPath === '/api/accounts/employees' && req.method === 'GET') {
+    const rows = (await store.listRecords()).filter(isTdsApplicable).map((r) => {
+      const p = r.settlement.previousMonthDues || {};
+      return {
+        id: r.id, empId: r.empId, name: r.name, designation: r.designation, department: r.department, lwd: r.lwd,
+        tdsReference: Number(p.tds) > 0 ? { amount: p.tds, month: p.month } : { amount: p.priorTds, month: p.priorMonth },
+        tdsReply: { status: r.tdsReply.status, amount: r.tdsReply.amount, receivedAt: r.tdsReply.receivedAt },
+      };
+    });
+    sendJson(res, 200, rows);
+    return true;
+  }
+
+  // The PLI contact's list: Sales employees only, identity and dates and the PLI
+  // answer — deliberately nothing about salary or the settlement.
+  if (urlPath === '/api/pli/employees' && req.method === 'GET') {
+    await syncPliFromMailbox();
+    const rows = (await store.listRecords()).filter(isSalesEmployee).map((r) => ({
+      id: r.id, empId: r.empId, name: r.name, designation: r.designation, department: r.department,
+      dor: r.dor, lwd: r.lwd,
+      pli: { status: r.pli.status, amount: r.pli.amount, sharedAt: r.pli.sharedAt, submittedAt: r.pli.submittedAt },
+    }));
+    sendJson(res, 200, rows);
+    return true;
+  }
+
   if (urlPath === '/api/records' && req.method === 'GET') {
     const records = await store.listRecords();
     await syncPliFromMailbox();
@@ -705,6 +740,10 @@ async function handleApi(req, res, urlPath) {
       return res.end(responsePageHtml('Not found', 'This settlement record could not be found.')), true;
     }
     let accountsExtra;
+    if (req.user.role === 'accounts' && !isTdsApplicable(rec)) {
+      res.writeHead(403, { 'Content-Type': 'text/html' });
+      return res.end(responsePageHtml('No access', 'This employee is not in the Accounts team queue.')), true;
+    }
     if (new URL(req.url, `http://${req.headers.host}`).searchParams.get('audience') === 'accounts') {
       const { tdsByMonth, failed } = await store.resolveTdsByMonth(rec);
       accountsExtra = tdsCalcHtml(computeTdsCalc(rec, tdsByMonth), failed);
@@ -1012,11 +1051,88 @@ async function handleApi(req, res, urlPath) {
   return false;
 }
 
+// ---- Sign-in and who may do what ----
+// Enforced only when AUTH_REQUIRED=1 (see lib/auth.js); otherwise everyone is HR, as before.
+// HR: everything. Accounts: the TDS-applicable list and their FnF sheet + TDS
+// calculation. PLI: the Sales list with no salary data. Pages reached through an
+// emailed token link (employee review, payment response, PLI entry) carry their
+// own check and stay open to whoever holds the link.
+const isHttps = (req) => String(req.headers['x-forwarded-proto'] || '').split(',')[0] === 'https' || PUBLIC_BASE_URL.startsWith('https://');
+
+const TOKEN_LINK_PATHS = [
+  /^\/api\/records\/\d+\/(review|respond|payment-response)$/,
+  /^\/api\/pli\/emp\/[^/]+$/,
+];
+const isTokenLink = (p) => TOKEN_LINK_PATHS.some((rx) => rx.test(p));
+
+function permitted(user, method, urlPath, query) {
+  if (user.role === 'hr') return true;
+  if (urlPath === '/api/me') return true;
+  if (user.role === 'accounts') {
+    if (method === 'GET' && urlPath === '/api/accounts/employees') return true;
+    return method === 'GET' && /^\/api\/records\/\d+\/preview$/.test(urlPath) && query.get('audience') === 'accounts';
+  }
+  if (user.role === 'pli') return method === 'GET' && urlPath === '/api/pli/employees';
+  return false;
+}
+
+function handleAuthRoute(req, res, urlPath, parsed) {
+  const secure = isHttps(req);
+  const redirect = (location) => { res.writeHead(302, { Location: location }); res.end(); };
+  const page = (status, title, message) => { res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(responsePageHtml(title, message)); };
+  const redirectUri = `${PUBLIC_BASE_URL}/auth/callback`;
+
+  if (urlPath === '/auth/login') {
+    if (!auth.authRequired()) return redirect('/');
+    return redirect(auth.beginLogin(res, redirectUri, secure));
+  }
+  if (urlPath === '/auth/callback') {
+    return auth.finishLogin(req, parsed.searchParams, redirectUri)
+      .then((who) => {
+        const role = auth.roleFor(who.email);
+        if (!role) return page(403, 'No access', `${who.email} is not set up to use this dashboard. Please ask HR to add you.`);
+        auth.startSession(res, { email: who.email, name: who.name, role }, secure);
+        return redirect('/');
+      })
+      .catch((err) => page(400, 'Sign-in failed', err.message));
+  }
+  if (urlPath === '/auth/logout') {
+    auth.endSession(res, secure);
+    return page(200, 'Signed out', 'You have been signed out. Close this tab, or open the dashboard link again to sign back in.');
+  }
+  // Test login for local development only; refuses to work on Vercel or without DEV_LOGIN=1.
+  if (urlPath === '/auth/dev') {
+    if (!auth.devLoginAllowed()) return page(404, 'Not found', 'There is nothing here.');
+    const role = parsed.searchParams.get('role');
+    if (!['hr', 'accounts', 'pli'].includes(role)) return page(400, 'Unknown role', 'Use ?role=hr, accounts or pli.');
+    auth.startSession(res, { email: parsed.searchParams.get('email') || `${role}@dev.local`, name: `Test ${role}`, role, dev: true }, false);
+    return redirect('/');
+  }
+  return page(404, 'Not found', 'There is nothing here.');
+}
+
 const server = http.createServer((req, res) => {
   const parsed = new URL(req.url, `http://${req.headers.host}`);
   const urlPath = decodeURIComponent(parsed.pathname);
 
+  if (urlPath.startsWith('/auth/')) {
+    try { handleAuthRoute(req, res, urlPath, parsed); } catch (err) { sendJson(res, 500, { error: err.message }); }
+    return;
+  }
+
+  let user;
+  try { user = auth.currentUser(req); } catch (err) { return sendJson(res, 500, { error: err.message }); }
+  if (!user && !isTokenLink(urlPath)) {
+    if (urlPath.startsWith('/api/')) return sendJson(res, 401, { error: 'Please sign in' });
+    res.writeHead(302, { Location: '/auth/login' });
+    return res.end();
+  }
+  req.user = user;
+
   if (urlPath.startsWith('/api/')) {
+    if (!isTokenLink(urlPath) && !permitted(user, req.method, urlPath, parsed.searchParams)) {
+      return sendJson(res, 403, { error: 'You do not have access to this.' });
+    }
     handleApi(req, res, urlPath)
       .then((handled) => {
         if (!handled) sendJson(res, 404, { error: 'Not found' });

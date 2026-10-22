@@ -263,6 +263,7 @@ footer.foot{max-width:1280px;margin:0 auto;padding:18px 42px 40px;font-family:"I
         <span>Owner: <b>HR Operations</b></span>
         <span>PRD: <b>v1.0</b></span>
         <span id="sync-status" class="sync-indicator">Loading…</span>
+        <span id="whoami"></span>
       </div>
     </div>
     <div class="status-pill">DRAFT — pending sign-off on open items §10</div>
@@ -275,6 +276,14 @@ footer.foot{max-width:1280px;margin:0 auto;padding:18px 42px 40px;font-family:"I
 <footer class="foot">FnF Settlement App — data source: live PMS (Kites API), synced via REST API (lib/store.js). Section 10 open items (TDS methodology, Incentive/PLI treatment) remain flagged pending stakeholder sign-off.</footer>
 
 <script>
+// If the sign-in session runs out while the page is open, go back to sign in instead of failing quietly.
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await _nativeFetch(...args);
+  if(res.status===401) location.href = '/auth/login';
+  return res;
+};
+
 /* ---------------- API layer ---------------- */
 async function apiList(){ const r = await fetch('/api/records?asOf=' + asOfDate); return r.json(); }
 async function apiPatch(id, patch){ const r = await fetch('/api/records/' + id, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch)}); return r.json(); }
@@ -1336,7 +1345,71 @@ function renderDetail(){
 }
 
 /* ---------------- main render ---------------- */
+/* ---------------- signed-in user + role-limited screens ---------------- */
+// HR sees the whole app. Accounts and PLI users get only their own screen, filled
+// from endpoints that never send them anything beyond what their job needs.
+let me = null; // { email, name, role, signInRequired }
+let restrictedRows = [];
+let restrictedSheetId = null;
+const esc = (s) => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function renderWhoAmI(){
+  const el = document.getElementById('whoami');
+  if(!el || !me || !me.signInRequired) return;
+  const roleLabel = { hr:'HR', accounts:'Accounts team', pli:'PLI' }[me.role] || me.role;
+  el.innerHTML = `${esc(me.name||me.email)} · ${roleLabel} · <a href="/auth/logout" style="color:inherit;">Sign out</a>`;
+}
+async function loadRestricted(){
+  const r = await fetch(me.role==='pli' ? '/api/pli/employees' : '/api/accounts/employees');
+  if(r.ok) restrictedRows = await r.json();
+}
+function openRestrictedSheet(id){
+  restrictedSheetId = id;
+  render();
+  setTimeout(()=>{ const el = document.getElementById('restricted-sheet'); if(el) el.scrollIntoView({behavior:'smooth'}); }, 0);
+}
+function restrictedPliHtml(){
+  return `<div class="panel">
+    <div class="panel-head"><h2>PLI</h2><span class="frtag">${restrictedRows.length} record(s)</span></div>
+    <div class="panel-sub">Sales employees whose final PLI / incentive amount is needed. Only employee details and dates are shown here — no salary information.</div>
+    <table class="ledger queue-table">
+      <tr><th>Employee Code</th><th>Employee Name</th><th>Designation</th><th>Department</th><th>DOR</th><th>LWD</th><th>PLI Status</th><th>PLI Amount</th></tr>
+      ${restrictedRows.map(r=>`<tr>
+        <td>${esc(r.empId)}</td><td>${esc(r.name)}</td><td>${esc(r.designation)||'—'}</td><td>${esc(r.department)||'—'}</td>
+        <td>${esc(r.dor)||'—'}</td><td>${esc(r.lwd)||'—'}</td><td>${pliStatusText(r)}</td>
+        <td>${r.pli.status==='submitted' ? (r.pli.amount===0 ? '₹0.00 (Nil)' : fmt(Number(r.pli.amount)||0)) : '—'}</td>
+      </tr>`).join('')}
+    </table>
+  </div>`;
+}
+function restrictedAccountsHtml(){
+  const replyText = (t) => t.status==='applied' ? (t.amount===0 ? 'Nil (₹0.00)' : fmt(Number(t.amount)||0)) : (t.status==='awaiting' ? 'Awaiting' : (t.status==='unclear' ? 'Needs review' : '—'));
+  return `<div class="panel">
+    <div class="panel-head"><h2>Accounts Team</h2><span class="frtag">${restrictedRows.length} record(s)</span></div>
+    <div class="panel-sub">Employees whose TDS applies. Open an employee to see their FnF sheet with the TDS calculation underneath.</div>
+    <table class="ledger queue-table">
+      <tr><th>Employee Code</th><th>Employee Name</th><th>Designation</th><th>Department</th><th>LWD</th><th>TDS already deducted</th><th>Final TDS</th><th>FnF Sheet with TDS</th></tr>
+      ${restrictedRows.map(r=>`<tr>
+        <td>${esc(r.empId)}</td><td>${esc(r.name)}</td><td>${esc(r.designation)||'—'}</td><td>${esc(r.department)||'—'}</td><td>${esc(r.lwd)||'—'}</td>
+        <td>${fmt(Number(r.tdsReference.amount)||0)} (${esc(r.tdsReference.month)})</td><td>${replyText(r.tdsReply)}</td>
+        <td><a href="javascript:void(0)" onclick="openRestrictedSheet(${r.id})" style="color:var(--navy);font-weight:600;">${restrictedSheetId===r.id?'Viewing ↓':'View Sheet →'}</a></td>
+      </tr>`).join('')}
+    </table>
+  </div>
+  ${restrictedSheetId!=null ? `<div class="panel" id="restricted-sheet">
+    <div class="panel-head"><h2>FnF Sheet &amp; TDS Calculation</h2></div>
+    <iframe src="/api/records/${restrictedSheetId}/preview?audience=accounts" style="width:100%;height:900px;border:0;" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+24)+'px'}catch(e){}"></iframe>
+  </div>` : ''}`;
+}
+function renderRestricted(){
+  document.getElementById('tabbar').innerHTML = `<div class="tab active">${me.role==='pli' ? 'PLI' : 'Accounts Team'}</div>`;
+  document.getElementById('app').innerHTML = me.role==='pli' ? restrictedPliHtml() : restrictedAccountsHtml();
+}
+// Keep their list current (amounts entered elsewhere show up without a reload).
+setInterval(async () => { if(me && me.role!=='hr'){ await loadRestricted(); render(); } }, 30000);
+
 function render(){
+  if(me && me.role!=='hr'){ renderRestricted(); return; }
   renderTabbar();
   const app = document.getElementById('app');
   if(view==='overview') app.innerHTML = renderOverview();
@@ -1394,6 +1467,15 @@ setInterval(pollActiveRecord, 5000);
 /* ---------------- boot ---------------- */
 (async function init(){
   try {
+    const meRes = await fetch('/api/me');
+    me = await meRes.json();
+    renderWhoAmI();
+    if(me.role!=='hr'){
+      await loadRestricted();
+      setSyncStatus('Synced');
+      render();
+      return;
+    }
     state.records = await apiList();
     state.records.forEach(r => { lastSynced[r.id] = JSON.stringify(r); });
     setSyncStatus('Synced');
