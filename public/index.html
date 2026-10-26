@@ -307,10 +307,22 @@ function scheduleSync(){
 }
 
 /* ---------------- local calc (mirrors lib/calc.js) ---------------- */
+// New PF rule (same as lib/calc.js): from Oct 2026 the monthly PF is ₹3,000. PF at or above the
+// old ₹1,800 cap is raised to ₹3,000 from that month; smaller PF is left alone; earlier months keep the old amount.
+const PF_OLD_CAP = 1800, PF_NEW_MONTHLY = 3000, PF_NEW_FROM = '2026-10';
+function pfForMonth(basePf, ym){
+  const pf = Number(basePf)||0;
+  return ym >= PF_NEW_FROM && pf >= PF_OLD_CAP ? Math.max(pf, PF_NEW_MONTHLY) : pf;
+}
+function pfMonthsForLwd(lwd){
+  const current = lwd ? lwd.slice(0,7) : new Date().toISOString().slice(0,7);
+  const [y, m] = current.split('-').map(Number);
+  return { current, previous: m===1 ? `${y-1}-12` : `${y}-${String(m-1).padStart(2,'0')}` };
+}
 function calc(rec){
   const c = rec.comp, d = rec.dues;
   const salary = c.workingDays > 0 ? (c.grossSalary / c.workingDays) * c.presentDays : 0;
-  const pf = c.workingDays > 0 ? (c.epf / c.workingDays) * c.presentDays : 0;
+  const pf = c.workingDays > 0 ? (pfForMonth(c.epf, pfMonthsForLwd(rec.lwd).current) / c.workingDays) * c.presentDays : 0;
   const gratuity = c.tenureYears > 5 ? (0.5 * c.grossSalary * 15 * c.tenureYears) / 26 : 0;
   const noticePay = d.noticePay.applicable ? Number(d.noticePay.amount || 0) : 0;
   const examDeduct = d.exam.required === "yes_required" ? Number(d.exam.amount || 0) : 0;
@@ -564,9 +576,11 @@ function applySalaryAndPfSplit(rec){
   const s = computeSalarySplit(rec.comp.grossSalary, rec.dor, rec.lwd, rec.comp.workingDays, rec.comp.presentDays);
   rec.settlement.earnings.salaryCurrentMonth = s.salaryCurrentMonth;
   rec.settlement.earnings.salaryPreviousMonth = s.salaryPreviousMonth;
-  const p = computeSalarySplit(rec.comp.epf, rec.dor, rec.lwd, rec.comp.workingDays, rec.comp.presentDays);
-  rec.settlement.deductions.pfCurrentMonth = p.salaryCurrentMonth;
-  rec.settlement.deductions.pfPreviousMonth = p.salaryPreviousMonth;
+  const pfMonths = pfMonthsForLwd(rec.lwd);
+  const pCur = computeSalarySplit(pfForMonth(rec.comp.epf, pfMonths.current), rec.dor, rec.lwd, rec.comp.workingDays, rec.comp.presentDays);
+  const pPrev = computeSalarySplit(pfForMonth(rec.comp.epf, pfMonths.previous), rec.dor, rec.lwd, rec.comp.workingDays, rec.comp.presentDays);
+  rec.settlement.deductions.pfCurrentMonth = pCur.salaryCurrentMonth;
+  rec.settlement.deductions.pfPreviousMonth = pPrev.salaryPreviousMonth;
   rec.settlement.earnings.gratuity = computeGratuity(rec.comp.grossSalary, rec.comp.tenureYears);
   if(rec.dues.noticePay.applicable){
     const noticePay = computeNoticePay(rec.comp.grossSalary, rec.comp.workingDays, rec.comp.presentDays);
@@ -1178,7 +1192,7 @@ function renderDetail(){
       <div class="panel-sub" style="margin-top:-4px;">Formulas per §8 Business Rules. Deductions above are carried in automatically.</div>
       <div class="field-grid">
         ${field(`<label>Gross Salary (₹)</label>`, `<input type="number" value="${rec.comp.grossSalary}" oninput="updateGrossSalary(${activeIndex},this.value)">`)}
-        ${field(`<label>EPF# (Employer PF base, ₹)</label>`, `<input type="number" value="${rec.comp.epf}" oninput="updateEpf(${activeIndex},this.value)">`)}
+        ${field(`<label>EPF# (PMS base, ₹) <span class="fr">PF is ₹3,000/month from Oct 2026${pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current)!==Number(rec.comp.epf) ? ` → ${fmt(pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current))} for the LWD month` : ''}</span></label>`, `<input type="number" value="${rec.comp.epf}" oninput="updateEpf(${activeIndex},this.value)">`)}
         ${field(`<label>Working Days <span class="fr">FR-3.1</span></label>`, `<input type="number" value="${rec.comp.workingDays}" oninput="state.records[${activeIndex}].comp.workingDays=this.value;render()">`)}
         ${field(`<label>Present Days</label>`, `<input type="number" value="${rec.comp.presentDays}" oninput="state.records[${activeIndex}].comp.presentDays=this.value;render()">`)}
         ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="number" step="0.1" value="${rec.comp.tenureYears}" oninput="updateTenureYears(${activeIndex},this.value)">`)}
