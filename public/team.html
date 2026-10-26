@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Full &amp; Final Settlement — Team Page</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0a1f3a;--ink-soft:#4c6480;--navy:#003b73;--navy-2:#0091ea;--gold:#0072ce;--gold-bright:#4fc3f7;--line:#cfe0f0;--green:#0f9d58;--green-bg:#e1f5ea;--red:#d64550;--red-bg:#fbe6e8;font-family:"IBM Plex Sans",sans-serif;}
+*{box-sizing:border-box;}
+body{margin:0;color:var(--ink);min-height:100vh;background:#fff;background-image:radial-gradient(circle at 100% 0%,rgba(0,145,234,.09),transparent 45%),radial-gradient(circle at 0% 100%,rgba(0,59,115,.07),transparent 45%);}
+.masthead{background:linear-gradient(115deg,var(--navy) 0%,#005fa3 45%,var(--navy-2) 100%);color:#fff;padding:26px 40px 22px;border-bottom:4px solid var(--gold-bright);}
+.masthead-row{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;}
+.kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--gold-bright);margin-bottom:10px;}
+h1{font-family:"Fraunces",serif;font-weight:500;font-size:32px;margin:0 0 4px;}
+.who{font-family:"IBM Plex Mono",monospace;font-size:12px;color:#cfe8ff;}
+.who a{color:#fff;cursor:pointer;text-decoration:underline;}
+.content{max-width:1280px;margin:0 auto;padding:24px 42px 60px;}
+.panel{background:#fff;border:1px solid var(--line);border-radius:10px;padding:28px 32px;margin-bottom:22px;box-shadow:0 4px 18px rgba(0,59,115,.06);}
+.panel h2{font-family:"Fraunces",serif;font-weight:500;font-size:26px;margin:0 0 6px;}
+.panel-head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:14px;}
+.count{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--gold);letter-spacing:1px;}
+.sub{font-size:13px;color:var(--ink-soft);margin:0 0 18px;line-height:1.5;}
+table{width:100%;border-collapse:collapse;font-size:13.5px;}
+th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--ink-soft);border-bottom:1px solid var(--ink);padding:8px;}
+td{padding:10px 8px;border-bottom:1px dashed var(--line);vertical-align:middle;}
+input{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:#f6faff;width:100%;}
+input:focus{outline:2px solid var(--gold-bright);outline-offset:1px;border-color:var(--gold);}
+.amt{display:flex;gap:8px;align-items:center;min-width:250px;}
+.amt input{width:130px;}
+button{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.4px;padding:9px 16px;border-radius:6px;border:1px solid var(--navy);background:var(--navy);color:#fff;cursor:pointer;}
+button.secondary{background:#fff;color:var(--navy);}
+button:disabled{opacity:.55;cursor:default;}
+.msg{font-size:12px;margin-top:4px;min-height:16px;}
+.ok{color:var(--green);} .bad{color:var(--red);}
+a.link{color:var(--navy);font-weight:600;cursor:pointer;text-decoration:none;}
+.pill{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:11px;padding:3px 10px;border-radius:20px;background:#e8f2fc;color:var(--gold);}
+.pill.done{background:var(--green-bg);color:var(--green);}
+.login{max-width:420px;margin:48px auto;}
+.login label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px;}
+.login button{width:100%;margin-top:20px;padding:12px;font-size:13px;}
+.err{margin-top:14px;padding:10px 12px;background:var(--red-bg);color:var(--red);border-radius:6px;font-size:13px;}
+iframe{width:100%;height:900px;border:0;}
+.hidden{display:none;}
+@media (max-width:760px){.content{padding:16px}.panel{padding:18px}.masthead{padding:20px}}
+</style>
+</head>
+<body>
+<div class="masthead">
+  <div class="masthead-row">
+    <div>
+      <div class="kicker">Full &amp; Final Settlement · Team Page</div>
+      <h1 id="title">Team sign-in</h1>
+    </div>
+    <div class="who" id="who"></div>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loginView" class="panel login hidden">
+    <h2>Sign in</h2>
+    <p class="sub">Use your official email and your employee code.</p>
+    <form id="loginForm" autocomplete="on">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" required placeholder="name@koenig-solutions.com">
+      <label for="password">Employee code</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required inputmode="numeric">
+      <button type="submit" id="loginBtn">Sign in</button>
+      <div id="loginErr" class="err hidden"></div>
+    </form>
+  </div>
+
+  <div id="appView" class="hidden"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const day = (iso) => String(iso || '').slice(0, 10);
+
+let me = null;
+let rows = [];
+let sheetId = null;
+const drafts = {};      // what's typed in each row's box, kept across refreshes
+const messages = {};    // per-row "Saved" / error text
+
+async function api(method, path, body) {
+  const res = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  let data = null; try { data = await res.json(); } catch {}
+  return { ok: res.ok, status: res.status, data };
+}
+
+function show(view) {
+  $('loginView').classList.toggle('hidden', view !== 'login');
+  $('appView').classList.toggle('hidden', view !== 'app');
+}
+
+async function boot() {
+  const r = await api('GET', '/api/team/me');
+  if (!r.ok) { $('title').textContent = 'Team sign-in'; $('who').textContent = ''; show('login'); return; }
+  me = r.data;
+  await load();
+  show('app');
+  render();
+}
+
+$('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = $('loginBtn'), err = $('loginErr');
+  btn.disabled = true; err.classList.add('hidden');
+  const r = await api('POST', '/api/team/login', { email: $('email').value, password: $('password').value });
+  btn.disabled = false;
+  if (!r.ok) { err.textContent = (r.data && r.data.error) || 'Could not sign in.'; err.classList.remove('hidden'); $('password').value = ''; return; }
+  $('password').value = '';
+  await boot();
+});
+
+async function signOut() {
+  await api('POST', '/api/team/logout');
+  me = null; rows = []; sheetId = null;
+  boot();
+}
+
+async function load() {
+  const r = await api('GET', '/api/team/employees');
+  if (r.status === 401) { me = null; show('login'); return false; }
+  if (r.ok) rows = r.data;
+  return true;
+}
+
+async function submitAmount(id) {
+  const input = $('amt-' + id), btn = $('go-' + id);
+  const value = input.value.trim();
+  if (!value) { messages[id] = { bad: true, text: 'Enter an amount, or NIL.' }; return render(); }
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const r = await api('POST', me.role === 'accounts' ? '/api/team/tds' : '/api/team/pli', { id, amount: value });
+  if (r.status === 401) { me = null; show('login'); return; }
+  if (r.ok) {
+    messages[id] = { bad: false, text: `Saved — ${r.data.amount === 0 ? 'NIL (₹0.00)' : inr(r.data.amount)} is now in the FnF sheet.` };
+    delete drafts[id];
+    await load();
+  } else {
+    messages[id] = { bad: true, text: (r.data && r.data.error) || 'Could not save. Please try again.' };
+  }
+  render();
+}
+
+function openSheet(id) {
+  sheetId = id;
+  render();
+  setTimeout(() => { const el = $('sheetPanel'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }, 0);
+}
+
+function entryCell(r, current) {
+  const draft = drafts[r.id];
+  const value = draft !== undefined ? draft : (current == null ? '' : String(current));
+  const m = messages[r.id];
+  return `<div class="amt"><input id="amt-${r.id}" value="${esc(value)}" placeholder="${me.role === 'accounts' ? 'TDS amount or NIL' : 'Enter amount or NIL'}"
+      oninput="drafts[${r.id}]=this.value" onkeydown="if(event.key==='Enter')submitAmount(${r.id})" inputmode="decimal" autocomplete="off">
+    <button id="go-${r.id}" onclick="submitAmount(${r.id})">Submit</button></div>
+    <div class="msg ${m ? (m.bad ? 'bad' : 'ok') : ''}">${m ? esc(m.text) : ''}</div>`;
+}
+
+function accountsView() {
+  const final = (t) => t.status === 'applied' ? `<span class="pill done">${t.amount === 0 ? 'Nil (₹0.00)' : inr(t.amount)}</span>` : '<span class="pill">Not entered</span>';
+  return `<div class="panel">
+    <div class="panel-head"><h2>Accounts Team</h2><span class="count">${rows.length} record(s)</span></div>
+    <p class="sub">Employees whose TDS applies. Open an employee's FnF sheet to see the TDS calculation, then enter the final TDS amount (or NIL) and submit. It goes straight into the FnF sheet on the main dashboard.</p>
+    <table>
+      <tr><th>Employee Code</th><th>Employee Name</th><th>Designation</th><th>Department</th><th>LWD</th><th>TDS already deducted</th><th>Final TDS</th><th>Add TDS amount</th><th>FnF Sheet</th></tr>
+      ${rows.map(r => `<tr>
+        <td>${esc(r.empId)}</td><td>${esc(r.name)}</td><td>${esc(r.designation) || '—'}</td><td>${esc(r.department) || '—'}</td><td>${esc(r.lwd) || '—'}</td>
+        <td>${inr(r.tdsReference.amount)} <span class="sub" style="margin:0">(${esc(r.tdsReference.month)})</span></td>
+        <td>${final(r.tdsReply)}</td>
+        <td>${entryCell(r, r.tdsReply.status === 'applied' ? r.tdsReply.amount : '')}</td>
+        <td><a class="link" onclick="openSheet(${r.id})">${sheetId === r.id ? 'Viewing ↓' : 'View Sheet →'}</a></td>
+      </tr>`).join('') || '<tr><td colspan="9" class="sub">No employees need a TDS amount right now.</td></tr>'}
+    </table>
+  </div>
+  ${sheetId != null ? `<div class="panel" id="sheetPanel"><div class="panel-head"><h2>FnF Sheet &amp; TDS Calculation</h2></div>
+    <iframe src="/api/team/sheet/${sheetId}" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+24)+'px'}catch(e){}"></iframe></div>` : ''}`;
+}
+
+function pliView() {
+  const status = (p) => p.status === 'submitted' ? `<span class="pill done">Received ${esc(day(p.submittedAt))}</span>` : '<span class="pill">Awaiting amount</span>';
+  return `<div class="panel">
+    <div class="panel-head"><h2>PLI</h2><span class="count">${rows.length} record(s)</span></div>
+    <p class="sub">Sales employees who are leaving. Enter each person's final PLI / incentive amount (or NIL if none) and submit. It goes straight into the FnF sheet on the main dashboard. You can come back and change it later.</p>
+    <table>
+      <tr><th>Employee Code</th><th>Employee Name</th><th>Designation</th><th>Department</th><th>DOR</th><th>LWD</th><th>PLI Status</th><th>PLI Amount</th><th>Enter Amount</th></tr>
+      ${rows.map(r => `<tr>
+        <td>${esc(r.empId)}</td><td>${esc(r.name)}</td><td>${esc(r.designation) || '—'}</td><td>${esc(r.department) || '—'}</td>
+        <td>${esc(r.dor) || '—'}</td><td>${esc(r.lwd) || '—'}</td><td>${status(r.pli)}</td>
+        <td>${r.pli.status === 'submitted' ? (r.pli.amount === 0 ? '₹0.00 (Nil)' : inr(r.pli.amount)) : '—'}</td>
+        <td>${entryCell(r, r.pli.status === 'submitted' ? r.pli.amount : '')}</td>
+      </tr>`).join('') || '<tr><td colspan="9" class="sub">No Sales employees are leaving right now.</td></tr>'}
+    </table>
+  </div>`;
+}
+
+function render() {
+  if (!me) return;
+  $('title').textContent = me.role === 'accounts' ? 'Accounts Team' : 'PLI';
+  $('who').innerHTML = `${esc(me.name)} · <a onclick="signOut()">Sign out</a>`;
+  $('appView').innerHTML = me.role === 'accounts' ? accountsView() : pliView();
+}
+
+// Keep the list current without disturbing someone who is typing.
+setInterval(async () => {
+  if (!me || (document.activeElement && document.activeElement.tagName === 'INPUT')) return;
+  const before = JSON.stringify(rows);
+  if (await load() && JSON.stringify(rows) !== before) render();
+}, 30000);
+
+boot();
+</script>
+</body>
+</html>

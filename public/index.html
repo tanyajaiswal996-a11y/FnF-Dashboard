@@ -280,7 +280,7 @@ footer.foot{max-width:1280px;margin:0 auto;padding:18px 42px 40px;font-family:"I
 const _nativeFetch = window.fetch.bind(window);
 window.fetch = async (...args) => {
   const res = await _nativeFetch(...args);
-  if(res.status===401) location.href = '/auth/login';
+  if(res.status===401) location.href = '/'; // the server sends a signed-out visitor to the right sign-in page
   return res;
 };
 
@@ -735,6 +735,7 @@ function teamColumns(team){
         const p = r.settlement.previousMonthDues;
         return Number(p.tds)>0 ? `Applicable (${fmt(Number(p.tds))} in ${p.month})` : `Applicable (${fmt(Number(p.priorTds))} in ${p.priorMonth})`;
       } },
+      { label:'Final TDS', render:r=>r.tdsReply && r.tdsReply.status==='applied' ? (r.tdsReply.amount===0 ? '₹0.00 (Nil)' : fmt(Number(r.tdsReply.amount)||0)) : '—' },
       { label:'FnF Sheet with TDS', render:r=>`<a href="javascript:void(0)" onclick="openAccountsSheet(${r.id})" style="color:var(--navy);font-weight:600;">${accountsSheetId===r.id?'Viewing ↓':'View Sheet →'}</a>` },
     ]);
   }
@@ -778,24 +779,35 @@ async function sharePli(id){
     render();
   }
 }
-// Pull in the PLI contact's answer (set server-side from the emailed link) without waiting for a reload.
-let pliPolling = false;
-async function pollPli(){
-  if(pliPolling) return;
-  pliPolling = true;
+// Pull in what the Accounts team (TDS) and the PLI contact enter on their own page, so it
+// shows in the open FnF sheet without a reload.
+let portalPolling = false;
+async function pollPortalUpdates(){
+  if(portalPolling) return;
+  portalPolling = true;
   try{
-    for(const r of state.records){
-      if(!r.pli || !isSalesEmployee(r)) continue;
-      const fresh = await (await fetch(`/api/records/${r.id}`)).json();
-      if(JSON.stringify(fresh.pli) === JSON.stringify(r.pli)) continue;
-      r.pli = fresh.pli;
-      if(fresh.pli.status==='submitted'){ r.settlement.earnings.incentives = fresh.settlement.earnings.incentives; r.comp.pli = fresh.comp.pli; }
-      render();
+    const res = await fetch('/api/portal-updates');
+    if(!res.ok) return;
+    let changed = false;
+    for(const u of await res.json()){
+      const r = state.records.find(x => x.id === u.id);
+      if(!r) continue;
+      if(JSON.stringify(u.pli) !== JSON.stringify(r.pli)){
+        r.pli = u.pli;
+        if(u.pli.status==='submitted'){ r.settlement.earnings.incentives = u.incentives; r.comp.pli = u.incentives; }
+        changed = true;
+      }
+      if(JSON.stringify(u.tdsReply) !== JSON.stringify(r.tdsReply)){
+        r.tdsReply = u.tdsReply;
+        if(u.tdsReply.status==='applied') r.settlement.deductions.tds = u.tds;
+        changed = true;
+      }
     }
-  } catch(e){ /* try again next tick */ }
-  finally { pliPolling = false; }
+    if(changed) render();
+  }catch(e){ /* try again next tick */ }
+  finally{ portalPolling = false; }
 }
-setInterval(pollPli, 15000);
+setInterval(pollPortalUpdates, 15000);
 function renderTeamList(team){
   const cols = teamColumns(team);
   let rows = state.records;
@@ -1357,7 +1369,13 @@ function renderWhoAmI(){
   const el = document.getElementById('whoami');
   if(!el || !me || !me.signInRequired) return;
   const roleLabel = { hr:'HR', accounts:'Accounts team', pli:'PLI' }[me.role] || me.role;
-  el.innerHTML = `${esc(me.name||me.email)} · ${roleLabel} · <a href="/auth/logout" style="color:inherit;">Sign out</a>`;
+  el.innerHTML = `${esc(me.name||me.email)} · ${roleLabel} · ${me.admin
+    ? '<a href="javascript:void(0)" onclick="adminSignOut()" style="color:inherit;">Sign out</a>'
+    : '<a href="/auth/logout" style="color:inherit;">Sign out</a>'}`;
+}
+async function adminSignOut(){
+  await fetch('/api/admin/logout', { method:'POST' });
+  location.href = '/';
 }
 async function loadRestricted(){
   const r = await fetch(me.role==='pli' ? '/api/pli/employees' : '/api/accounts/employees');

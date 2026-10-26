@@ -16,6 +16,7 @@ const outlook = require('./lib/outlook');
 const { parseTdsReply } = require('./lib/tds-reply');
 const { classifyAck } = require('./lib/ack-reply');
 const auth = require('./lib/auth');
+const team = require('./lib/team');
 
 const SENDER_UPN = process.env.OUTLOOK_SENDER_UPN;
 const PAYMENT_CONTACT_UPN = process.env.OUTLOOK_PAYMENT_CONTACT_UPN;
@@ -312,7 +313,8 @@ function syncPliFromMailbox(force) {
         if (!rec || done.has(code) || from !== SENDER_UPN.toLowerCase() || !amountMatch) continue;
         done.add(code);
         const amount = Number(amountMatch[1]);
-        if (rec.pli.status === 'submitted' && rec.pli.submittedAt === m.receivedDateTime) continue;
+        // Only a newer confirmation changes anything — an amount entered since (on the PLI page or via the link) wins over an older email.
+        if (rec.pli.submittedAt && new Date(rec.pli.submittedAt) >= new Date(m.receivedDateTime)) continue;
         await store.updateRecord(rec.id, {
           pli: { status: 'submitted', amount, submittedAt: m.receivedDateTime },
           settlement: { earnings: { incentives: amount } },
@@ -595,42 +597,172 @@ function responsePageHtml(title, message) {
   </body></html>`;
 }
 
+// The Accounts team's work queue: only employees whose TDS applies, with identity,
+// the TDS reference and the final TDS once entered. Their FnF sheet and TDS
+// calculation open from here.
+async function accountsRows() {
+  return (await store.listRecords()).filter(isTdsApplicable).map((r) => {
+    const p = r.settlement.previousMonthDues || {};
+    return {
+      id: r.id, empId: r.empId, name: r.name, designation: r.designation, department: r.department, lwd: r.lwd,
+      tdsReference: Number(p.tds) > 0 ? { amount: p.tds, month: p.month } : { amount: p.priorTds, month: p.priorMonth },
+      tdsReply: { status: r.tdsReply.status, amount: r.tdsReply.amount, receivedAt: r.tdsReply.receivedAt },
+    };
+  });
+}
+
+// The PLI contact's list: Sales employees only, identity and dates and the PLI
+// answer — deliberately nothing about salary or the settlement.
+async function pliRows() {
+  await syncPliFromMailbox();
+  return (await store.listRecords()).filter(isSalesEmployee).map((r) => ({
+    id: r.id, empId: r.empId, name: r.name, designation: r.designation, department: r.department,
+    dor: r.dor, lwd: r.lwd,
+    pli: { status: r.pli.status, amount: r.pli.amount, sharedAt: r.pli.sharedAt, submittedAt: r.pli.submittedAt },
+  }));
+}
+
+// ---- The Accounts / PLI page (public/team.html) ----
+// Its own sign-in (lib/team.js), independent of the main dashboard. Each person can
+// only reach their own list and their own entry action, and what they type goes
+// straight into the shared record, so it shows up in the main dashboard's FnF sheet.
+async function handleTeamApi(req, res, urlPath) {
+  const secure = isHttps(req);
+  const needJson = () => /application\/json/.test(req.headers['content-type'] || '');
+
+  if (urlPath === '/api/team/login' && req.method === 'POST') {
+    if (!needJson()) return sendJson(res, 415, { error: 'Unsupported request' }), true;
+    const body = await readBody(req);
+    const result = await team.login(body.email, body.password, ['accounts', 'pli']);
+    if (!result.ok) {
+      sendJson(res, result.locked ? 429 : 401, { error: result.locked ? 'Too many attempts. Please try again in 15 minutes.' : 'The email or employee code is not correct.' });
+      return true;
+    }
+    team.startSession(res, result.user, secure);
+    sendJson(res, 200, { role: result.user.role, name: result.user.name });
+    return true;
+  }
+  if (urlPath === '/api/team/logout' && req.method === 'POST') {
+    team.endSession(res, secure, 'accounts'); // Accounts and PLI share one cookie
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+
+  const user = team.currentTeamUser(req);
+  if (!user) return sendJson(res, 401, { error: 'Please sign in' }), true;
+
+  if (urlPath === '/api/team/me' && req.method === 'GET') {
+    sendJson(res, 200, { role: user.role, name: user.name, email: user.email });
+    return true;
+  }
+  if (urlPath === '/api/team/employees' && req.method === 'GET') {
+    sendJson(res, 200, user.role === 'accounts' ? await accountsRows() : await pliRows());
+    return true;
+  }
+
+  // The FnF sheet with its TDS calculation underneath (Accounts only, TDS-applicable employees only).
+  const sheetMatch = urlPath.match(/^\/api\/team\/sheet\/(\d+)$/);
+  if (sheetMatch && req.method === 'GET') {
+    const rec = user.role === 'accounts' ? await store.getRecord(sheetMatch[1]) : null;
+    if (!rec || !isTdsApplicable(rec)) {
+      res.writeHead(403, { 'Content-Type': 'text/html' });
+      return res.end(responsePageHtml('No access', 'This employee is not in your queue.')), true;
+    }
+    const { tdsByMonth, failed } = await store.resolveTdsByMonth(rec);
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(previewPageHtml(rec, tdsCalcHtml(computeTdsCalc(rec, tdsByMonth), failed)));
+    return true;
+  }
+
+  if (req.method === 'POST' && (urlPath === '/api/team/tds' || urlPath === '/api/team/pli')) {
+    if (!needJson()) return sendJson(res, 415, { error: 'Unsupported request' }), true;
+    const isTds = urlPath === '/api/team/tds';
+    if (user.role !== (isTds ? 'accounts' : 'pli')) return sendJson(res, 403, { error: 'You do not have access to this.' }), true;
+
+    const body = await readBody(req);
+    const rec = await store.getRecord(body.id);
+    if (!rec || !(isTds ? isTdsApplicable(rec) : isSalesEmployee(rec))) return sendJson(res, 403, { error: 'This employee is not in your list.' }), true;
+    const amount = parsePliAmount(body.amount);
+    if (amount == null) return sendJson(res, 400, { error: 'Enter an amount, or 0 / NIL if there is none.' }), true;
+
+    const now = new Date().toISOString();
+    if (isTds) {
+      await store.updateRecord(rec.id, {
+        tdsReply: { status: 'applied', amount, receivedAt: now, sentAt: rec.tdsReply.sentAt || now, messageId: 'accounts-page', preview: `Entered by ${user.name} on the Accounts page` },
+        settlement: { deductions: { tds: amount } },
+      });
+    } else {
+      await store.updateRecord(rec.id, {
+        pli: { status: 'submitted', amount, submittedAt: now, sharedAt: rec.pli.sharedAt || now, enteredBy: user.name },
+        settlement: { earnings: { incentives: amount } },
+        comp: { pli: amount },
+      });
+    }
+    sendJson(res, 200, { id: rec.id, amount, at: now });
+    return true;
+  }
+
+  return sendJson(res, 404, { error: 'Not found' }), true;
+}
+
+// ---- The admin (HR) login for the main dashboard ----
+// Its own page (public/login.html) and its own cookie, separate from the Accounts / PLI page.
+async function handleAdminApi(req, res, urlPath) {
+  const secure = isHttps(req);
+  if (urlPath === '/api/admin/login' && req.method === 'POST') {
+    if (!/application\/json/.test(req.headers['content-type'] || '')) return sendJson(res, 415, { error: 'Unsupported request' }), true;
+    const body = await readBody(req);
+    const result = await team.login(body.email, body.password, ['admin']);
+    if (!result.ok) {
+      sendJson(res, result.locked ? 429 : 401, { error: result.locked ? 'Too many attempts. Please try again in 15 minutes.' : 'The email or password is not correct.' });
+      return true;
+    }
+    team.startSession(res, result.user, secure);
+    sendJson(res, 200, { name: result.user.name });
+    return true;
+  }
+  if (urlPath === '/api/admin/logout' && req.method === 'POST') {
+    team.endSession(res, secure, 'admin');
+    sendJson(res, 200, { ok: true });
+    return true;
+  }
+  return sendJson(res, 404, { error: 'Not found' }), true;
+}
+
 async function handleApi(req, res, urlPath) {
+  if (urlPath.startsWith('/api/admin/')) return handleAdminApi(req, res, urlPath);
+
   const asOf = new URL(req.url, `http://${req.headers.host}`).searchParams.get('asOf') || new Date().toISOString().slice(0, 10);
 
   if (urlPath === '/api/me' && req.method === 'GET') {
     const u = req.user;
-    sendJson(res, 200, { email: u.email, name: u.name, role: u.role, signInRequired: auth.authRequired() });
+    sendJson(res, 200, { email: u.email, name: u.name, role: u.role, admin: !!u.admin, signInRequired: auth.authRequired() || !!u.admin });
     return true;
   }
 
-  // The Accounts team's work queue: only employees whose TDS applies, with identity
-  // and the TDS reference — their FnF sheet and TDS calculation open from here.
   if (urlPath === '/api/accounts/employees' && req.method === 'GET') {
-    const rows = (await store.listRecords()).filter(isTdsApplicable).map((r) => {
-      const p = r.settlement.previousMonthDues || {};
-      return {
-        id: r.id, empId: r.empId, name: r.name, designation: r.designation, department: r.department, lwd: r.lwd,
-        tdsReference: Number(p.tds) > 0 ? { amount: p.tds, month: p.month } : { amount: p.priorTds, month: p.priorMonth },
-        tdsReply: { status: r.tdsReply.status, amount: r.tdsReply.amount, receivedAt: r.tdsReply.receivedAt },
-      };
-    });
-    sendJson(res, 200, rows);
+    sendJson(res, 200, await accountsRows());
     return true;
   }
 
-  // The PLI contact's list: Sales employees only, identity and dates and the PLI
-  // answer — deliberately nothing about salary or the settlement.
   if (urlPath === '/api/pli/employees' && req.method === 'GET') {
-    await syncPliFromMailbox();
-    const rows = (await store.listRecords()).filter(isSalesEmployee).map((r) => ({
-      id: r.id, empId: r.empId, name: r.name, designation: r.designation, department: r.department,
-      dor: r.dor, lwd: r.lwd,
-      pli: { status: r.pli.status, amount: r.pli.amount, sharedAt: r.pli.sharedAt, submittedAt: r.pli.submittedAt },
-    }));
-    sendJson(res, 200, rows);
+    sendJson(res, 200, await pliRows());
     return true;
   }
+
+  // Small feed the main dashboard polls so amounts entered on the Accounts / PLI
+  // page appear in the open FnF sheet without a reload.
+  if (urlPath === '/api/portal-updates' && req.method === 'GET') {
+    const records = await store.listRecords();
+    await syncPliFromMailbox();
+    sendJson(res, 200, records.map((r) => ({
+      id: r.id, pli: r.pli, tdsReply: r.tdsReply,
+      tds: r.settlement.deductions.tds, incentives: r.settlement.earnings.incentives,
+    })));
+    return true;
+  }
+
+  if (urlPath.startsWith('/api/team/')) return handleTeamApi(req, res, urlPath);
 
   if (urlPath === '/api/records' && req.method === 'GET') {
     const records = await store.listRecords();
@@ -669,6 +801,10 @@ async function handleApi(req, res, urlPath) {
       if (rec.pli.status === 'submitted') {
         rec.settlement.earnings.incentives = rec.pli.amount;
         rec.comp.pli = rec.pli.amount;
+      }
+      // Likewise the TDS the Accounts team confirmed is the final TDS deduction.
+      if (rec.tdsReply.status === 'applied' && rec.tdsReply.amount != null) {
+        rec.settlement.deductions.tds = rec.tdsReply.amount;
       }
       sendJson(res, 200, withDerived(rec));
       return true;
@@ -855,7 +991,9 @@ async function handleApi(req, res, urlPath) {
       fromUpns: [SENDER_UPN, ...(process.env.ACCOUNTS_CONTACT_UPN || '').split(',')],
     });
 
-    if (reply && reply.id !== rec.tdsReply.messageId) {
+    // An older emailed reply must not overwrite an amount entered since on the Accounts page.
+    const newerThanCurrent = !rec.tdsReply.receivedAt || new Date(reply ? reply.receivedAt : 0) > new Date(rec.tdsReply.receivedAt);
+    if (reply && reply.id !== rec.tdsReply.messageId && newerThanCurrent) {
       const parsed = parseTdsReply(reply.text);
       const preview = reply.text.trim().replace(/\s+/g, ' ').slice(0, 160);
       const base = { messageId: reply.id, receivedAt: reply.receivedAt, preview };
@@ -1062,6 +1200,8 @@ const isHttps = (req) => String(req.headers['x-forwarded-proto'] || '').split(',
 const TOKEN_LINK_PATHS = [
   /^\/api\/records\/\d+\/(review|respond|payment-response)$/,
   /^\/api\/pli\/emp\/[^/]+$/,
+  /^\/team$/, /^\/api\/team\//, // the Accounts / PLI page has its own sign-in (lib/team.js)
+  /^\/login$/, /^\/api\/admin\/(login|logout)$/, // the admin sign-in page and its calls
 ];
 const isTokenLink = (p) => TOKEN_LINK_PATHS.some((rx) => rx.test(p));
 
@@ -1120,11 +1260,14 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // With the admin login configured (TEAM_ADMIN_EMP_CODE) the main dashboard needs it;
+  // otherwise it behaves as before (open, or Microsoft sign-in if AUTH_REQUIRED=1).
+  const adminLogin = team.adminConfigured();
   let user;
-  try { user = auth.currentUser(req); } catch (err) { return sendJson(res, 500, { error: err.message }); }
+  try { user = adminLogin ? team.currentAdmin(req) : auth.currentUser(req); } catch (err) { return sendJson(res, 500, { error: err.message }); }
   if (!user && !isTokenLink(urlPath)) {
     if (urlPath.startsWith('/api/')) return sendJson(res, 401, { error: 'Please sign in' });
-    res.writeHead(302, { Location: '/auth/login' });
+    res.writeHead(302, { Location: adminLogin ? '/login' : '/auth/login' });
     return res.end();
   }
   req.user = user;
@@ -1144,7 +1287,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const filePath = path.join(ROOT, 'public', urlPath === '/' ? '/index.html' : urlPath);
+  const filePath = path.join(ROOT, 'public', urlPath === '/' ? '/index.html' : urlPath === '/team' ? '/team.html' : urlPath === '/login' ? '/login.html' : urlPath);
   if (!filePath.startsWith(path.join(ROOT, 'public'))) {
     res.writeHead(403);
     res.end('Forbidden');

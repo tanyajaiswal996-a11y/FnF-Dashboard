@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Full &amp; Final Settlement — Admin Sign-in</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0a1f3a;--ink-soft:#4c6480;--navy:#003b73;--navy-2:#0091ea;--gold-bright:#4fc3f7;--line:#cfe0f0;--red:#d64550;--red-bg:#fbe6e8;font-family:"IBM Plex Sans",sans-serif;}
+*{box-sizing:border-box;}
+body{margin:0;color:var(--ink);min-height:100vh;background:#fff;background-image:radial-gradient(circle at 100% 0%,rgba(0,145,234,.09),transparent 45%),radial-gradient(circle at 0% 100%,rgba(0,59,115,.07),transparent 45%);}
+.masthead{background:linear-gradient(115deg,var(--navy) 0%,#005fa3 45%,var(--navy-2) 100%);color:#fff;padding:26px 40px 22px;border-bottom:4px solid var(--gold-bright);}
+.kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:var(--gold-bright);margin-bottom:10px;}
+h1{font-family:"Fraunces",serif;font-weight:500;font-size:32px;margin:0;}
+.card{max-width:420px;margin:48px auto;background:#fff;border:1px solid var(--line);border-radius:10px;padding:28px 32px;box-shadow:0 4px 18px rgba(0,59,115,.06);}
+.card h2{font-family:"Fraunces",serif;font-weight:500;font-size:26px;margin:0 0 6px;}
+.sub{font-size:13px;color:var(--ink-soft);margin:0 0 8px;line-height:1.5;}
+label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px;}
+input{font:inherit;padding:10px;border:1px solid var(--line);border-radius:6px;background:#f6faff;width:100%;}
+input:focus{outline:2px solid var(--gold-bright);outline-offset:1px;}
+button{width:100%;margin-top:20px;padding:12px;font-family:"IBM Plex Mono",monospace;font-size:13px;letter-spacing:.4px;border-radius:6px;border:1px solid var(--navy);background:var(--navy);color:#fff;cursor:pointer;}
+button:disabled{opacity:.55;}
+.err{margin-top:14px;padding:10px 12px;background:var(--red-bg);color:var(--red);border-radius:6px;font-size:13px;}
+.hidden{display:none;}
+</style>
+</head>
+<body>
+<div class="masthead">
+  <div class="kicker">Full &amp; Final Settlement · HR Operations</div>
+  <h1>Admin sign-in</h1>
+</div>
+<div class="card">
+  <h2>Sign in</h2>
+  <p class="sub">Use your official email and your password.</p>
+  <form id="f" autocomplete="on">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required placeholder="name@koenig-solutions.com">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" required>
+    <button type="submit" id="btn">Sign in</button>
+    <div id="err" class="err hidden"></div>
+  </form>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+// Already signed in? Go straight to the dashboard.
+fetch('/api/me').then(r => { if (r.ok) location.replace('/'); }).catch(() => {});
+$('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('btn').disabled = true; $('err').classList.add('hidden');
+  const res = await fetch('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: $('email').value, password: $('password').value }) });
+  const data = await res.json().catch(() => ({}));
+  $('btn').disabled = false; $('password').value = '';
+  if (res.ok) { location.replace('/'); return; }
+  $('err').textContent = data.error || 'Could not sign in.'; $('err').classList.remove('hidden');
+});
+</script>
+</body>
+</html>
