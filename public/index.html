@@ -117,10 +117,6 @@ input[type=text], input[type=number], input[type=date], select{
   font-family:"IBM Plex Sans",sans-serif;font-size:14px;padding:9px 11px;
   border:1px solid #bfd9f2;border-radius:5px;background:#f7fbff;color:var(--ink);
 }
-/* Plain typed entry for amounts: no up/down spinner arrows on any number box. */
-input[type=number]{-moz-appearance:textfield;appearance:textfield;}
-input[type=number]::-webkit-outer-spin-button,
-input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 input:focus, select:focus{outline:2px solid var(--gold-bright);outline-offset:1px;border-color:var(--gold);}
 .hint{font-size:11.5px;color:var(--ink-soft);}
 
@@ -457,11 +453,16 @@ function recordsInSelectedQuarter(){
   const qKey = quarterOf(asOfDate).key;
   return state.records.filter(x=>quarterKeyOf(x.lwd)===qKey);
 }
+// Live, from what has actually happened on the record:
+//   'kite' — the FnF has been shared with the employee (email sent from the dashboard)
+//            and the process is not yet closed;
+//   'hr'   — the LWD has been reached but HR has not yet shared the FnF.
+// A closed FnF (experience letter and salary slips done) is in neither.
 function fnfDueState(rec){
   if(recStatus(rec)==='closed') return null;
-  const src = rec.fnfDue && rec.fnfDue.pendingFrom;
-  if(!src || src==='none') return null;
-  return src; // 'kite' | 'hr'
+  if(rec.emailSentDate) return 'kite';
+  if(rec.lwd && rec.lwd <= asOfDate) return 'hr';
+  return null;
 }
 function fnfDoneState(rec){
   if(!(rec.closure.expLetter && rec.closure.slips)) return null;
@@ -827,11 +828,6 @@ async function pollPortalUpdates(){
 }
 setInterval(pollPortalUpdates, 15000);
 
-// Scrolling the page with the mouse over a focused number box must not change the amount.
-document.addEventListener('wheel', () => {
-  const el = document.activeElement;
-  if(el && el.tagName==='INPUT' && el.type==='number') el.blur();
-}, { passive: true });
 function renderTeamList(team){
   const cols = teamColumns(team);
   let rows = state.records;
@@ -1159,12 +1155,12 @@ function renderDetail(){
               <option value="not_required" ${rec.dues.exam.required==='not_required'?'selected':''}>Not Required</option>
               <option value="yes_required" ${rec.dues.exam.required==='yes_required'?'selected':''}>Yes Required</option>
             </select>`)}
-            ${field(`<label>Amount</label>`, `<input type="number" value="${rec.dues.exam.amount}" ${rec.dues.exam.required!=='yes_required'?'disabled':''} oninput="state.records[${activeIndex}].dues.exam.amount=this.value;render()">`)}
+            ${field(`<label>Amount</label>`, `<input type="text" inputmode="decimal" data-num value="${rec.dues.exam.amount}" ${rec.dues.exam.required!=='yes_required'?'disabled':''} oninput="state.records[${activeIndex}].dues.exam.amount=this.value;render()">`)}
           </div>
         </div>
         <div class="dues-card">
           <h4>WFH Dues</h4>
-          ${field(`<label>WFH Balance <span class="fr">FR-2.3 — negative = deduct</span></label>`, `<input type="number" value="${rec.dues.wfh.balance}" oninput="state.records[${activeIndex}].dues.wfh.balance=this.value;render()">`)}
+          ${field(`<label>WFH Balance <span class="fr">FR-2.3 — negative = deduct</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.dues.wfh.balance}" oninput="state.records[${activeIndex}].dues.wfh.balance=this.value;render()">`)}
         </div>
         <div class="dues-card">
           <h4>DC Team</h4>
@@ -1189,7 +1185,7 @@ function renderDetail(){
           </div>
           <div class="field-grid">
             ${field(`<label>Date recorded in No Dues Panel</label>`, `<input type="date" value="${rec.dues.noticePay.date}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="state.records[${activeIndex}].dues.noticePay.date=this.value">`)}
-            ${field(`<label>Notice Pay amount <span class="fr">Gross ÷ Working Days × Present Days, PF excluded</span></label>`, `<input type="number" value="${rec.dues.noticePay.amount}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="updateNoticePayAmount(${activeIndex},this.value)">`)}
+            ${field(`<label>Notice Pay amount <span class="fr">Gross ÷ Working Days × Present Days, PF excluded</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.dues.noticePay.amount}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="updateNoticePayAmount(${activeIndex},this.value)">`)}
           </div>
         </div>
       </div>
@@ -1201,12 +1197,12 @@ function renderDetail(){
       <div class="section-title"><span class="num">3</span>Compensation &amp; Deduction Calculation <span class="frtag" style="margin-left:auto;">FR-3.1 – FR-3.11</span></div>
       <div class="panel-sub" style="margin-top:-4px;">Formulas per §8 Business Rules. Deductions above are carried in automatically.</div>
       <div class="field-grid">
-        ${field(`<label>Gross Salary (₹)</label>`, `<input type="number" value="${rec.comp.grossSalary}" oninput="updateGrossSalary(${activeIndex},this.value)">`)}
-        ${field(`<label>EPF# (PMS base, ₹) <span class="fr">PF is ₹3,000/month from Oct 2026${pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current)!==Number(rec.comp.epf) ? ` → ${fmt(pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current))} for the LWD month` : ''}</span></label>`, `<input type="number" value="${rec.comp.epf}" oninput="updateEpf(${activeIndex},this.value)">`)}
-        ${field(`<label>Working Days <span class="fr">FR-3.1</span></label>`, `<input type="number" value="${rec.comp.workingDays}" oninput="state.records[${activeIndex}].comp.workingDays=this.value;render()">`)}
-        ${field(`<label>Present Days</label>`, `<input type="number" value="${rec.comp.presentDays}" oninput="state.records[${activeIndex}].comp.presentDays=this.value;render()">`)}
-        ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="number" step="0.1" value="${rec.comp.tenureYears}" oninput="updateTenureYears(${activeIndex},this.value)">`)}
-        ${field(`<label>TA Bill reconciliation (₹) <span class="fr">+owed / −recover</span></label>`, `<input type="number" value="${rec.comp.taBill}" oninput="state.records[${activeIndex}].comp.taBill=this.value;render()">`)}
+        ${field(`<label>Gross Salary (₹)</label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.grossSalary}" oninput="updateGrossSalary(${activeIndex},this.value)">`)}
+        ${field(`<label>EPF# (PMS base, ₹) <span class="fr">PF is ₹3,000/month from Oct 2026${pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current)!==Number(rec.comp.epf) ? ` → ${fmt(pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current))} for the LWD month` : ''}</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.epf}" oninput="updateEpf(${activeIndex},this.value)">`)}
+        ${field(`<label>Working Days <span class="fr">FR-3.1</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.workingDays}" oninput="state.records[${activeIndex}].comp.workingDays=this.value;render()">`)}
+        ${field(`<label>Present Days</label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.presentDays}" oninput="state.records[${activeIndex}].comp.presentDays=this.value;render()">`)}
+        ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="text" inputmode="decimal" data-num step="0.1" value="${rec.comp.tenureYears}" oninput="updateTenureYears(${activeIndex},this.value)">`)}
+        ${field(`<label>TA Bill reconciliation (₹) <span class="fr">+owed / −recover</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.taBill}" oninput="state.records[${activeIndex}].comp.taBill=this.value;render()">`)}
       </div>
       <table class="ledger" style="margin-top:18px;">
         <tr><th>Computed Component</th><th class="num">Amount</th></tr>
@@ -1288,7 +1284,7 @@ function renderDetail(){
         const st = settlementCalc(rec);
         const e = rec.settlement.earnings, d = rec.settlement.deductions;
         const isPaySheet = st.netPayable >= 0;
-        const amtInput = (group, key) => `<input type="number" value="${(group==='earnings'?e:d)[key]}" oninput="state.records[${activeIndex}].settlement.${group}.${key}=this.value;render()" style="width:100%;max-width:140px;text-align:right;font-family:'IBM Plex Mono',monospace;padding:4px 6px;border:1px solid #bfd9f2;border-radius:4px;background:#f7fbff;">`;
+        const amtInput = (group, key) => `<input type="text" inputmode="decimal" data-num value="${(group==='earnings'?e:d)[key]}" oninput="state.records[${activeIndex}].settlement.${group}.${key}=this.value;render()" style="width:100%;max-width:140px;text-align:right;font-family:'IBM Plex Mono',monospace;padding:4px 6px;border:1px solid #bfd9f2;border-radius:4px;background:#f7fbff;">`;
         return `
       <div class="field-grid" style="margin-bottom:14px;">
         ${field(`<label>Date of Joining (DOJ)</label>`, `<input type="date" value="${rec.settlement.doj||''}" oninput="state.records[${activeIndex}].settlement.doj=this.value">`)}
@@ -1452,14 +1448,47 @@ function renderRestricted(){
 // Keep their list current (amounts entered elsewhere show up without a reload).
 setInterval(async () => { if(me && me.role!=='hr'){ await loadRestricted(); render(); } }, 30000);
 
+// Every change redraws the page, which would normally throw away the box being typed in.
+// So the box in use (and the cursor inside it) is remembered and put back after each redraw.
+function captureFocus(){
+  const el = document.activeElement, app = document.getElementById('app');
+  if(!el || !app || !app.contains(el) || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return null;
+  const idx = [...app.querySelectorAll('input,textarea,select')].indexOf(el);
+  let start = null, end = null;
+  try{ start = el.selectionStart; end = el.selectionEnd; }catch(e){ /* this kind of box has no cursor position */ }
+  return { idx, start, end };
+}
+function restoreFocus(saved){
+  if(!saved || saved.idx < 0) return;
+  const el = [...document.getElementById('app').querySelectorAll('input,textarea,select')][saved.idx];
+  if(!el || el.disabled) return;
+  el.focus({ preventScroll:true });
+  try{ if(saved.start!=null) el.setSelectionRange(saved.start, saved.end); }catch(e){}
+}
+// Amount boxes accept digits, one decimal point and a leading minus only (commas and letters are dropped as you type).
+document.addEventListener('input', (ev) => {
+  const el = ev.target;
+  if(!el || !el.matches || !el.matches('input[data-num]')) return;
+  const before = el.value;
+  let v = before.replace(/[^0-9.\-]/g, '').replace(/(?!^)-/g, '');
+  const dot = v.indexOf('.');
+  if(dot !== -1) v = v.slice(0, dot+1) + v.slice(dot+1).replace(/\./g, '');
+  if(v === before) return;
+  const pos = el.selectionStart;
+  el.value = v;
+  try{ const p = Math.max(0, (pos==null ? v.length : pos) - (before.length - v.length)); el.setSelectionRange(p, p); }catch(e){}
+}, true); // capture phase: runs before the box's own handler reads the value
+
 function render(){
   if(me && me.role!=='hr'){ renderRestricted(); return; }
+  const focused = captureFocus();
   renderTabbar();
   const app = document.getElementById('app');
   if(view==='overview') app.innerHTML = renderOverview();
   else if(view==='list') app.innerHTML = renderList();
   else if(view==='accounts' || view==='pli' || view==='dc') app.innerHTML = renderTeamList(view);
   else app.innerHTML = renderDetail();
+  restoreFocus(focused);
   scheduleSync();
 }
 
