@@ -323,7 +323,7 @@ function calc(rec){
   const c = rec.comp, d = rec.dues;
   const salary = c.workingDays > 0 ? (c.grossSalary / c.workingDays) * c.presentDays : 0;
   const pf = c.workingDays > 0 ? (pfForMonth(c.epf, pfMonthsForLwd(rec.lwd).current) / c.workingDays) * c.presentDays : 0;
-  const gratuity = c.tenureYears > GRATUITY_MIN_YEARS ? (0.5 * c.grossSalary * 15 * c.tenureYears) / 26 : 0;
+  const gratuity = computeGratuity(c.grossSalary, c.tenureYears);
   const noticePay = d.noticePay.applicable ? Number(d.noticePay.amount || 0) : 0;
   const examDeduct = d.exam.required === "yes_required" ? Number(d.exam.amount || 0) : 0;
   const wfhDeduct = Number(d.wfh.balance || 0) < 0 ? Math.abs(Number(d.wfh.balance)) : 0;
@@ -587,7 +587,8 @@ const GRATUITY_MIN_YEARS = 4.6;
 function computeGratuity(grossSalary, tenureYears){
   const gross = Number(grossSalary||0);
   const years = Number(tenureYears||0);
-  return years>GRATUITY_MIN_YEARS ? Math.round((0.5*gross*15*years)/26) : 0;
+  // The tiny 1e-9 keeps an exact half (e.g. 15,187.50) rounding up instead of down on floating-point error.
+  return years>GRATUITY_MIN_YEARS ? Math.round(((0.5*gross)/26)*15*years + 1e-9) : 0;
 }
 function tenureYearsBetween(doj, asOf){
   if(!doj) return 0;
@@ -1248,7 +1249,7 @@ function renderDetail(){
         <tr><th>Computed Component</th><th class="num">Amount</th></tr>
         <tr><td>Salary — Gross ÷ Working Days × Present Days</td><td class="num">${fmt(r.salary)}</td></tr>
         <tr><td>PF — EPF# ÷ Working Days × Present Days</td><td class="num">${fmt(r.pf)}</td></tr>
-        <tr><td>Gratuity ${rec.comp.tenureYears>GRATUITY_MIN_YEARS?'':'(not applicable — tenure ≤ 4.6 yrs)'}</td><td class="num">${fmt(r.gratuity)}</td></tr>
+        <tr><td>Gratuity — 50% of Gross ÷ 26 × 15 × Tenure ${rec.comp.tenureYears>GRATUITY_MIN_YEARS?'':'(not applicable — tenure ≤ 4.6 yrs)'}</td><td class="num">${fmt(r.gratuity)}</td></tr>
         <tr><td>Notice Pay ${rec.dues.noticePay.applicable?'':'(not applicable)'}</td><td class="num">${fmt(r.noticePay)}</td></tr>
       </table>
     </div>
@@ -1335,7 +1336,7 @@ function renderDetail(){
         <tr><td>Salary (${months.previous})</td><td class="num">${amtInput('earnings','salaryPreviousMonth')}</td></tr>
         <tr><td>Incentives${rec.pli && rec.pli.status==='submitted' ? ' <span class="fr">final — per PLI team</span>' : (rec.pli && rec.pli.status==='shared' ? ' <span class="fr">awaiting PLI team</span>' : '')}</td><td class="num">${amtInput('earnings','incentives')}</td></tr>
         <tr><td>TA Bill (if positive)</td><td class="num">${amtInput('earnings','taBillPositive')}</td></tr>
-        <tr><td>Gratuity</td><td class="num">${amtInput('earnings','gratuity')}</td></tr>
+        <tr><td>Gratuity <span class="fr">50% of Gross ÷ 26 × 15 × Tenure</span></td><td class="num">${amtInput('earnings','gratuity')}</td></tr>
         <tr><td>Any other Reimbursement</td><td class="num">${amtInput('earnings','otherReimbursement')}</td></tr>
         <tr><td>Notice Period Pay</td><td class="num">${amtInput('earnings','noticePeriodPay')}</td></tr>
         <tr class="subtotal"><td>Total Earnings</td><td class="num">${fmt(st.earningsTotal)}</td></tr>
