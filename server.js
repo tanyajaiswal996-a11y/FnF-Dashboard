@@ -55,12 +55,43 @@ function fmtInr(n) {
   return '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Where an employee pays a recovery (an FnF where they owe the company money).
+const COMPANY_BANK = {
+  'Bank Name': 'Kotak Mahindra Bank',
+  'Account Number': '0211560317',
+  'IFSC Code': 'KKBK0000220',
+  'Account Type': 'Current Account',
+  'Account Holder Name': 'Koenig Solutions Pvt Ltd',
+};
+
+// The amount to be recovered from the employee, or 0 when the FnF is payable to them
+// (or nets to nothing). Bank details are shown only when this is above zero.
+function recoveryAmount(rec) {
+  const net = settlementCalc(rec).netPayable;
+  return net < 0 ? Math.abs(net) : 0;
+}
+
+function recoveryBankDetailsHtml(rec) {
+  const amount = recoveryAmount(rec);
+  if (!amount) return '';
+  const cell = 'padding:6px 10px;border:1px solid #cfe0f0;';
+  const rows = Object.entries(COMPANY_BANK)
+    .map(([k, v]) => `<tr><td style="${cell}font-weight:600;background:#f6faff;">${k}</td><td style="${cell}">${v}</td></tr>`).join('');
+  return `
+    <div style="margin:22px 0;padding:14px 16px;border:1px solid #f0c9cd;background:#fdf3f4;border-radius:6px;font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#0a1f3a;">
+      <div style="font-weight:700;margin-bottom:6px;">Recovery payable by you: ${fmtInr(amount)}</div>
+      <div style="margin-bottom:10px;">Please pay the recovery amount to the following bank account:</div>
+      <table style="border-collapse:collapse;font-size:13px;">${rows}</table>
+    </div>`;
+}
+
 function approvalEmailHtml(rec, baseUrl) {
   const reviewUrl = `${baseUrl}/api/records/${rec.id}/review?token=${rec.sheetApproval.reviewToken}`;
   return `
   <div style="font-family:Segoe UI,Arial,sans-serif;color:#0a1f3a;max-width:600px;">
     <p>Dear ${rec.name || 'Employee'},</p>
     <p>Your tentative Full &amp; Final settlement sheet is ready. Please review the detailed breakdown and Approve or Reject it.</p>
+    ${recoveryBankDetailsHtml(rec)}
     <div style="margin:24px 0;">
       <a href="${reviewUrl}" style="background:#003b73;color:#fff;padding:12px 24px;border-radius:5px;text-decoration:none;font-weight:600;">Review FnF Sheet →</a>
     </div>
@@ -161,6 +192,7 @@ function reviewPageHtml(rec) {
     <h2>Full &amp; Final Settlement — ${rec.name||''}</h2>
     <p>Please review the detailed sheet below before responding.</p>
     ${sheetHtml}
+    ${recoveryBankDetailsHtml(rec)}
     <div style="display:flex;gap:24px;margin-top:32px;flex-wrap:wrap;">
       <form method="GET" action="/api/records/${rec.id}/respond">
         <input type="hidden" name="action" value="approve">
@@ -565,7 +597,7 @@ function previewPageHtml(rec, accountsExtraHtml) {
   <body style="font-family:Segoe UI,Arial,sans-serif;max-width:${accounts ? '1280px' : '700px'};margin:${accounts ? '16px' : '40px'} auto;padding:0 16px;color:#0a1f3a;">
     <h2>Full &amp; Final Settlement — ${rec.name||''}</h2>
     <p style="color:#4c6480;">${accounts ? 'Accounts view — the FnF sheet followed by its TDS calculation.' : 'Preview only — this is exactly what the employee will see once you send it. No action has been taken.'}</p>
-    <div style="max-width:700px;">${sheetHtml}</div>
+    <div style="max-width:700px;">${sheetHtml}${accounts ? '' : recoveryBankDetailsHtml(rec)}</div>
     ${accounts ? accountsExtraHtml : ''}
   </body></html>`;
 }
