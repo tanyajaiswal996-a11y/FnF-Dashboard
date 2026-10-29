@@ -1006,6 +1006,14 @@ function filteredRecords(){
   }
 }
 function toggleLwdSort(){ listSortDir = listSortDir==='asc' ? 'desc' : 'asc'; render(); }
+// Was TDS deducted from this employee's Net Payable in the last two payroll months before LWD?
+function tdsHistoryCell(rec){
+  if(!rec.lwd) return '—';
+  if(!isTdsApplicable(rec)) return '<span class="badge sla-upcoming">Not deducted</span>';
+  const p = rec.settlement.previousMonthDues;
+  const hit = Number(p.tds)>0 ? { amount:p.tds, month:p.month } : { amount:p.priorTds, month:p.priorMonth };
+  return `<span class="badge status-closed">Deducted</span> <span style="font-size:12px;color:var(--ink-soft);white-space:nowrap;">${fmt(Number(hit.amount)||0)} · ${esc(hit.month)}</span>`;
+}
 function renderList(){
   const quarterScoped = listFilter!=='all' && !(listFilter in PEND_FILTERS);
   const rows = filteredRecords().slice().sort((a,b)=>{
@@ -1020,7 +1028,7 @@ function renderList(){
     ${pendStrip(listFilter)}
     <div class="panel-sub">${quarterScoped ? `Filtered to ${quarterOf(asOfDate).label} (by LWD). ` : ''}Highlighted rows have an open pendency. Summary view only — open a name to see the full consolidated record.</div>
     <table class="ledger queue-table">
-      <tr><th>EmpCode</th><th>Name</th><th>Department</th><th>Location</th><th style="cursor:pointer;user-select:none;" onclick="toggleLwdSort()">LWD ${listSortDir==='asc'?'↑':'↓'}</th><th>Status</th><th>SLA</th><th>Pendency</th><th></th></tr>
+      <tr><th>EmpCode</th><th>Name</th><th>Department</th><th>Location</th><th style="cursor:pointer;user-select:none;" onclick="toggleLwdSort()">LWD ${listSortDir==='asc'?'↑':'↓'}</th><th>Status</th><th>TDS deducted before</th><th>SLA</th><th>Pendency</th><th></th></tr>
       ${rows.map((rec)=>{
         const i = state.records.indexOf(rec);
         const st = recStatus(rec);
@@ -1031,6 +1039,7 @@ function renderList(){
           <td><a href="javascript:void(0)" onclick="openRecord(${i})" style="color:var(--navy);font-weight:600;text-decoration:none;">${rec.name||'(unnamed)'}</a></td>
           <td>${rec.department||'—'}</td><td>${rec.location||'—'}</td><td>${rec.lwd||'—'}</td>
           <td><span class="badge status-${st}">${st.toUpperCase()}</span></td>
+          <td>${tdsHistoryCell(rec)}</td>
           <td><span class="badge sla-${sla.state}">${sla.label}</span></td>
           <td>${pend.map(p=>`<span class="pend-chip">${p.label}</span>`).join('') || '—'}</td>
           <td><button class="btn gold" style="padding:6px 12px;font-size:11px;" onclick="openRecord(${i})">Open →</button></td>
