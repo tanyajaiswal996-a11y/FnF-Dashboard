@@ -1336,7 +1336,7 @@ function renderDetail(){
         <tr><td>Salary (${months.previous})</td><td class="num">${amtInput('earnings','salaryPreviousMonth')}</td></tr>
         <tr><td>Incentives${rec.pli && rec.pli.status==='submitted' ? ' <span class="fr">final — per PLI team</span>' : (rec.pli && rec.pli.status==='shared' ? ' <span class="fr">awaiting PLI team</span>' : '')}</td><td class="num">${amtInput('earnings','incentives')}</td></tr>
         <tr><td>TA Bill (if positive)</td><td class="num">${amtInput('earnings','taBillPositive')}</td></tr>
-        <tr><td>Gratuity <span class="fr">50% of Gross ÷ 26 × 15 × Tenure</span></td><td class="num">${amtInput('earnings','gratuity')}</td></tr>
+        <tr><td>Gratuity</td><td class="num">${amtInput('earnings','gratuity')}</td></tr>
         <tr><td>Any other Reimbursement</td><td class="num">${amtInput('earnings','otherReimbursement')}</td></tr>
         <tr><td>Notice Period Pay</td><td class="num">${amtInput('earnings','noticePeriodPay')}</td></tr>
         <tr class="subtotal"><td>Total Earnings</td><td class="num">${fmt(st.earningsTotal)}</td></tr>
