@@ -323,7 +323,7 @@ function calc(rec){
   const c = rec.comp, d = rec.dues;
   const salary = c.workingDays > 0 ? (c.grossSalary / c.workingDays) * c.presentDays : 0;
   const pf = c.workingDays > 0 ? (pfForMonth(c.epf, pfMonthsForLwd(rec.lwd).current) / c.workingDays) * c.presentDays : 0;
-  const gratuity = c.tenureYears > 5 ? (0.5 * c.grossSalary * 15 * c.tenureYears) / 26 : 0;
+  const gratuity = c.tenureYears > GRATUITY_MIN_YEARS ? (0.5 * c.grossSalary * 15 * c.tenureYears) / 26 : 0;
   const noticePay = d.noticePay.applicable ? Number(d.noticePay.amount || 0) : 0;
   const examDeduct = d.exam.required === "yes_required" ? Number(d.exam.amount || 0) : 0;
   const wfhDeduct = Number(d.wfh.balance || 0) < 0 ? Math.abs(Number(d.wfh.balance)) : 0;
@@ -582,10 +582,18 @@ function jumpTo(id){
   if(el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth', block:'start'});
 }
 
+// New gratuity rule (same as lib/calc.js): payable once the employee has completed MORE than 4.6 years.
+const GRATUITY_MIN_YEARS = 4.6;
 function computeGratuity(grossSalary, tenureYears){
   const gross = Number(grossSalary||0);
   const years = Number(tenureYears||0);
-  return years>5 ? Math.round((0.5*gross*15*years)/26) : 0;
+  return years>GRATUITY_MIN_YEARS ? Math.round((0.5*gross*15*years)/26) : 0;
+}
+function tenureYearsBetween(doj, asOf){
+  if(!doj) return 0;
+  const end = asOf ? new Date(asOf) : new Date();
+  const years = (end.getTime() - new Date(doj).getTime()) / (365.25*24*3600*1000);
+  return Math.max(0, Math.round(years*100)/100);
 }
 function computeNoticePay(grossSalary, workingDays, presentDays){
   const gross = Number(grossSalary||0);
@@ -632,12 +640,20 @@ function updateLwd(i, value){
   const { workingDays, presentDays } = computeWorkingPresentDays(value);
   rec.comp.workingDays = workingDays;
   rec.comp.presentDays = presentDays;
+  if(rec.settlement.doj && value) rec.comp.tenureYears = tenureYearsBetween(rec.settlement.doj, value); // service is counted up to the LWD
   applySalaryAndPfSplit(rec);
   render();
 }
 function updateDor(i, value){
   const rec = state.records[i];
   rec.dor = value;
+  applySalaryAndPfSplit(rec);
+  render();
+}
+function updateDoj(i, value){
+  const rec = state.records[i];
+  rec.settlement.doj = value;
+  if(value) rec.comp.tenureYears = tenureYearsBetween(value, rec.lwd || null);
   applySalaryAndPfSplit(rec);
   render();
 }
@@ -1225,14 +1241,14 @@ function renderDetail(){
         ${field(`<label>EPF# (PMS base, ₹) <span class="fr">PF is ₹3,000/month from Oct 2026${pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current)!==Number(rec.comp.epf) ? ` → ${fmt(pfForMonth(rec.comp.epf, pfMonthsForLwd(rec.lwd).current))} for the LWD month` : ''}</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.epf}" oninput="updateEpf(${activeIndex},this.value)">`)}
         ${field(`<label>Working Days <span class="fr">FR-3.1</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.workingDays}" oninput="state.records[${activeIndex}].comp.workingDays=this.value;render()">`)}
         ${field(`<label>Present Days</label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.presentDays}" oninput="state.records[${activeIndex}].comp.presentDays=this.value;render()">`)}
-        ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 5</span></label>`, `<input type="text" inputmode="decimal" data-num step="0.1" value="${rec.comp.tenureYears}" oninput="updateTenureYears(${activeIndex},this.value)">`)}
+        ${field(`<label>Tenure, exact years <span class="fr">FR-3.4 — gratuity only if &gt; 4.6</span></label>`, `<input type="text" inputmode="decimal" data-num step="0.1" value="${rec.comp.tenureYears}" oninput="updateTenureYears(${activeIndex},this.value)">`)}
         ${field(`<label>TA Bill reconciliation (₹) <span class="fr">+owed / −recover</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.comp.taBill}" oninput="state.records[${activeIndex}].comp.taBill=this.value;render()">`)}
       </div>
       <table class="ledger" style="margin-top:18px;">
         <tr><th>Computed Component</th><th class="num">Amount</th></tr>
         <tr><td>Salary — Gross ÷ Working Days × Present Days</td><td class="num">${fmt(r.salary)}</td></tr>
         <tr><td>PF — EPF# ÷ Working Days × Present Days</td><td class="num">${fmt(r.pf)}</td></tr>
-        <tr><td>Gratuity ${rec.comp.tenureYears>5?'':'(not applicable — tenure ≤ 5 yrs)'}</td><td class="num">${fmt(r.gratuity)}</td></tr>
+        <tr><td>Gratuity ${rec.comp.tenureYears>GRATUITY_MIN_YEARS?'':'(not applicable — tenure ≤ 4.6 yrs)'}</td><td class="num">${fmt(r.gratuity)}</td></tr>
         <tr><td>Notice Pay ${rec.dues.noticePay.applicable?'':'(not applicable)'}</td><td class="num">${fmt(r.noticePay)}</td></tr>
       </table>
     </div>
@@ -1311,7 +1327,7 @@ function renderDetail(){
         const amtInput = (group, key) => `<input type="text" inputmode="decimal" data-num value="${(group==='earnings'?e:d)[key]}" oninput="state.records[${activeIndex}].settlement.${group}.${key}=this.value;render()" style="width:100%;max-width:140px;text-align:right;font-family:'IBM Plex Mono',monospace;padding:4px 6px;border:1px solid #bfd9f2;border-radius:4px;background:#f7fbff;">`;
         return `
       <div class="field-grid" style="margin-bottom:14px;">
-        ${field(`<label>Date of Joining (DOJ)</label>`, `<input type="date" value="${rec.settlement.doj||''}" oninput="state.records[${activeIndex}].settlement.doj=this.value">`)}
+        ${field(`<label>Date of Joining (DOJ)</label>`, `<input type="date" value="${rec.settlement.doj||''}" oninput="updateDoj(${activeIndex},this.value)">`)}
       </div>
       <table class="ledger">
         <tr><th>Earnings</th><th class="num">₹</th></tr>
