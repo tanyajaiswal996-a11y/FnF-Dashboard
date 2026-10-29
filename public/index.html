@@ -541,6 +541,20 @@ let activeSection = "sec-resignation";
 let visitedSections = new Set(["sec-resignation"]);
 
 /* ---------------- TDS & FnF SLA workflow actions ---------------- */
+// The Exam Dues box drives the exam line in the settlement sheet, and a hand-corrected amount is kept
+// (PMS sometimes leaves an exam entry out, for example one with no approval date).
+function setExamDues(i, patch){
+  const rec = state.records[i], e = rec.dues.exam;
+  Object.assign(e, patch, { manual: true });
+  rec.settlement.deductions.examDues = e.required==='yes_required' ? (Number(e.amount)||0) : 0;
+  render();
+}
+function resetExamDues(i){
+  const rec = state.records[i], e = rec.dues.exam, pms = Number(e.pmsAmount)||0;
+  e.manual = false; e.amount = pms; e.required = pms>0 ? 'yes_required' : 'not_required';
+  rec.settlement.deductions.examDues = pms;
+  render();
+}
 function setAssetIssued(i, val){
   const d = state.records[i].dues;
   d.dcTeam = Object.assign({}, d.dcTeam, { assetIssued: val });
@@ -1160,12 +1174,13 @@ function renderDetail(){
         <div class="dues-card">
           <h4>Exam Dues</h4>
           <div class="field-grid" style="grid-template-columns:1fr 1fr;">
-            ${field(`<label>Status <span class="fr">FR-2.2</span></label>`, `<select onchange="state.records[${activeIndex}].dues.exam.required=this.value;render()">
+            ${field(`<label>Status <span class="fr">FR-2.2</span></label>`, `<select onchange="setExamDues(${activeIndex},{required:this.value})">
               <option value="not_required" ${rec.dues.exam.required==='not_required'?'selected':''}>Not Required</option>
               <option value="yes_required" ${rec.dues.exam.required==='yes_required'?'selected':''}>Yes Required</option>
             </select>`)}
-            ${field(`<label>Amount</label>`, `<input type="text" inputmode="decimal" data-num value="${rec.dues.exam.amount}" ${rec.dues.exam.required!=='yes_required'?'disabled':''} oninput="state.records[${activeIndex}].dues.exam.amount=this.value;render()">`)}
+            ${field(`<label>Amount</label>`, `<input type="text" inputmode="decimal" data-num value="${rec.dues.exam.amount}" ${rec.dues.exam.required!=='yes_required'?'disabled':''} oninput="setExamDues(${activeIndex},{amount:this.value})">`)}
           </div>
+          ${rec.dues.exam.manual && Number(rec.dues.exam.amount)!==Number(rec.dues.exam.pmsAmount||0) ? `<div class="panel-sub" style="margin:8px 0 0;">PMS shows ${fmt(Number(rec.dues.exam.pmsAmount)||0)} — adjusted manually. <a href="javascript:void(0)" onclick="resetExamDues(${activeIndex})" style="color:var(--navy);font-weight:600;">Use PMS amount</a></div>` : ''}
         </div>
         <div class="dues-card">
           <h4>WFH Dues</h4>
