@@ -658,7 +658,7 @@ async function sendApprovalEmail(i){
   const rec = state.records[i];
   if(!rec.personalEmail){ alert('Enter the employee\'s personal email first.'); return; }
   try{
-    await apiPatch(rec.id, { personalEmail: rec.personalEmail, settlement: rec.settlement });
+    await apiPatch(rec.id, { personalEmail: rec.personalEmail, emailCc: rec.emailCc||'', emailBcc: rec.emailBcc||'', settlement: rec.settlement });
     lastSynced[rec.id] = JSON.stringify(rec);
     const r = await fetch('/api/records/' + rec.id + '/send-approval-email', { method:'POST' });
     const body = await r.json();
@@ -1324,12 +1324,14 @@ function renderDetail(){
       </table>`;
       })()}
 
-      ${rec.emailSentDate ? `<div class="callout success" style="margin-top:18px;"><b>Email sent</b> to ${rec.personalEmail||rec.contact||'employee'} on ${rec.emailSentDate}. LWD → email gap: ${daysBetween(rec.lwd, rec.emailSentDate)} day(s).</div>` : `<div class="callout" style="margin-top:18px;">Not yet sent to the employee. Target: within 2 days of LWD (${rec.lwd||'LWD not set'}).</div>`}
+      ${rec.emailSentDate ? `<div class="callout success" style="margin-top:18px;"><b>Email sent</b> to ${rec.personalEmail||rec.contact||'employee'}${rec.emailCc ? `, CC ${esc(rec.emailCc)}` : ''}${rec.emailBcc ? `, BCC ${esc(rec.emailBcc)}` : ''} on ${rec.emailSentDate}. LWD → email gap: ${daysBetween(rec.lwd, rec.emailSentDate)} day(s).</div>` : `<div class="callout" style="margin-top:18px;">Not yet sent to the employee. Target: within 2 days of LWD (${rec.lwd||'LWD not set'}).</div>`}
 
       ${ackTrackingHtml(rec)}
 
       <div class="field-grid" style="margin-top:14px;">
         ${field(`<label>Employee's Personal Email <span class="fr">required to send</span></label>`, `<input type="text" value="${rec.personalEmail||''}" placeholder="name@personal-provider.com" oninput="state.records[${activeIndex}].personalEmail=this.value" onblur="render()">`)}
+        ${field(`<label>CC <span class="fr">optional — you are always on CC</span></label>`, `<input type="text" value="${esc(rec.emailCc||'')}" placeholder="name@koenig-solutions.com; another@koenig-solutions.com" oninput="state.records[${activeIndex}].emailCc=this.value">`)}
+        ${field(`<label>BCC <span class="fr">optional — hidden from the employee</span></label>`, `<input type="text" value="${esc(rec.emailBcc||'')}" placeholder="name@koenig-solutions.com" oninput="state.records[${activeIndex}].emailBcc=this.value">`)}
       </div>
 
       <div class="actions" style="margin-top:14px;">

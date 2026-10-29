@@ -55,6 +55,14 @@ function fmtInr(n) {
   return '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// 'a@x.com; b@y.com, c@z.com' -> the valid addresses and the entries that are not addresses.
+const EMAIL_RE = /^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/;
+function parseEmailList(text) {
+  const parts = String(text || '').split(/[;,\s]+/).map((p) => p.trim()).filter(Boolean);
+  return { valid: parts.filter((p) => EMAIL_RE.test(p)), invalid: parts.filter((p) => !EMAIL_RE.test(p)) };
+}
+const uniqueEmails = (list) => [...new Map(list.map((e) => [e.toLowerCase(), e])).values()];
+
 // Where an employee pays a recovery (an FnF where they owe the company money).
 const COMPANY_BANK = {
   'Bank Name': 'Kotak Mahindra Bank',
@@ -858,6 +866,13 @@ async function handleApi(req, res, urlPath) {
     if (!rec) return sendJson(res, 404, { error: 'Not found' }), true;
     if (!rec.personalEmail) return sendJson(res, 400, { error: 'Personal email is required before sending' }), true;
 
+    // Optional extra CC / BCC people HR typed in; checked before anything is changed or sent.
+    const ccList = parseEmailList(rec.emailCc), bccList = parseEmailList(rec.emailBcc);
+    const badAddresses = [...ccList.invalid, ...bccList.invalid];
+    if (badAddresses.length) return sendJson(res, 400, { error: 'These CC / BCC addresses are not valid: ' + badAddresses.join(', ') }), true;
+    const cc = uniqueEmails([SENDER_UPN, ...ccList.valid]);
+    const bcc = uniqueEmails(bccList.valid).filter((e) => !cc.includes(e.toLowerCase()) && e.toLowerCase() !== rec.personalEmail.trim().toLowerCase());
+
     const reviewToken = crypto.randomBytes(16).toString('hex');
     await store.updateRecord(id, { emailSentDate: asOf });
     await store.updateRecord(id, {
@@ -873,7 +888,8 @@ async function handleApi(req, res, urlPath) {
     const sent = await outlook.sendMailTracked({
       fromUpn: SENDER_UPN,
       to: updated.personalEmail,
-      cc: SENDER_UPN,
+      cc,
+      bcc,
       subject: `Full & Final Settlement — (${employeeSubjectTag(updated)})`,
       html: approvalEmailHtml(updated, baseUrl),
     });
