@@ -93,6 +93,15 @@ function recoveryBankDetailsHtml(rec) {
     </div>`;
 }
 
+// A review link is valid if it is the latest one or any earlier one sent to the employee.
+function isReviewToken(rec, token) {
+  const a = rec.sheetApproval || {};
+  return !!token && (token === a.reviewToken || (a.oldTokens || []).includes(token));
+}
+function previousReviewTokens(a) {
+  return [...new Set([a && a.reviewToken, ...((a && a.oldTokens) || [])].filter(Boolean))].slice(0, 25);
+}
+
 function approvalEmailHtml(rec, baseUrl) {
   const reviewUrl = `${baseUrl}/api/records/${rec.id}/review?token=${rec.sheetApproval.reviewToken}`;
   return `
@@ -876,7 +885,8 @@ async function handleApi(req, res, urlPath) {
     const reviewToken = crypto.randomBytes(16).toString('hex');
     await store.updateRecord(id, { emailSentDate: asOf });
     await store.updateRecord(id, {
-      sheetApproval: { status: 'sent', sentAt: asOf, respondedAt: '', reviewToken, rejectionReason: '' },
+      // Links in earlier emails to the employee stay valid, so re-sending never strands an older email.
+      sheetApproval: { status: 'sent', sentAt: asOf, respondedAt: '', reviewToken, rejectionReason: '', oldTokens: previousReviewTokens(rec.sheetApproval) },
     });
     const updated = await store.getRecord(id);
     const proto = req.headers['x-forwarded-proto'] || 'http';
@@ -1074,7 +1084,7 @@ async function handleApi(req, res, urlPath) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       return res.end(responsePageHtml('Already responded', `This settlement was already marked as "${rec.sheetApproval.status}".`)), true;
     }
-    if (token !== rec.sheetApproval.reviewToken) {
+    if (!isReviewToken(rec, token)) {
       res.writeHead(403, { 'Content-Type': 'text/html' });
       return res.end(responsePageHtml('Invalid link', 'This review link is invalid or has expired.')), true;
     }
@@ -1101,7 +1111,7 @@ async function handleApi(req, res, urlPath) {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       return res.end(responsePageHtml('Already responded', `This settlement was already marked as "${rec.sheetApproval.status}".`)), true;
     }
-    if (token !== rec.sheetApproval.reviewToken || (action !== 'approve' && action !== 'reject')) {
+    if (!isReviewToken(rec, token) || (action !== 'approve' && action !== 'reject')) {
       res.writeHead(403, { 'Content-Type': 'text/html' });
       return res.end(responsePageHtml('Invalid link', 'This approval link is invalid or has expired.')), true;
     }
