@@ -451,15 +451,18 @@ async function notifyPaymentContact(rec, baseUrl) {
     const t = upd.ackTracking;
     const subject = `FnF Approved — (${employeeSubjectTag(upd)})`;
     const html = paymentEmailHtml(upd, baseUrl);
+    // HR (the sender) and the employee are copied on the payment request, so both can see it was raised.
+    const payTo = String(PAYMENT_CONTACT_UPN || '').toLowerCase();
+    const cc = uniqueEmails([SENDER_UPN, t.employeeEmail || upd.personalEmail].filter(Boolean)).filter((e) => e.toLowerCase() !== payTo);
 
     let ownId = null;
     if (t.conversationId) {
       const root = await outlook.findRootMessage(SENDER_UPN, t.conversationId);
       if (root) {
-        ownId = (await outlook.forwardMessage({ mailboxUpn: SENDER_UPN, messageId: root.id, to: PAYMENT_CONTACT_UPN, subject, commentHtml: html })).internetMessageId;
+        ownId = (await outlook.forwardMessage({ mailboxUpn: SENDER_UPN, messageId: root.id, to: PAYMENT_CONTACT_UPN, cc, subject, commentHtml: html })).internetMessageId;
       }
     }
-    if (!ownId) await outlook.sendMail({ fromUpn: SENDER_UPN, to: PAYMENT_CONTACT_UPN, subject, html });
+    if (!ownId) await outlook.sendMail({ fromUpn: SENDER_UPN, to: PAYMENT_CONTACT_UPN, cc, subject, html });
 
     await store.updateRecord(rec.id, {
       ackTracking: {
