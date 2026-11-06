@@ -96,7 +96,12 @@ function recoveryBankDetailsHtml(rec) {
 // A review link is valid if it is the latest one or any earlier one sent to the employee.
 function isReviewToken(rec, token) {
   const a = rec.sheetApproval || {};
-  return !!token && (token === a.reviewToken || (a.oldTokens || []).includes(token));
+  return !!token && (token === a.reviewToken || (a.oldTokens || []).includes(token) || token === signedReviewToken(rec.empId));
+}
+// The review link is signed from the employee code, so every email ever sent for the same
+// employee carries a link that stays valid, however many times or from whichever server it was sent.
+function signedReviewToken(empId) {
+  try { return crypto.createHmac('sha256', linkSecret()).update(`review:${empId}`).digest('hex').slice(0, 32); } catch { return ''; }
 }
 function previousReviewTokens(a) {
   return [...new Set([a && a.reviewToken, ...((a && a.oldTokens) || [])].filter(Boolean))].slice(0, 25);
@@ -882,7 +887,7 @@ async function handleApi(req, res, urlPath) {
     const cc = uniqueEmails([SENDER_UPN, ...ccList.valid]);
     const bcc = uniqueEmails(bccList.valid).filter((e) => !cc.includes(e.toLowerCase()) && e.toLowerCase() !== rec.personalEmail.trim().toLowerCase());
 
-    const reviewToken = crypto.randomBytes(16).toString('hex');
+    const reviewToken = signedReviewToken(rec.empId) || crypto.randomBytes(16).toString('hex');
     await store.updateRecord(id, { emailSentDate: asOf });
     await store.updateRecord(id, {
       // Links in earlier emails to the employee stay valid, so re-sending never strands an older email.
