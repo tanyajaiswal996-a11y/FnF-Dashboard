@@ -596,9 +596,31 @@ function tenureYearsBetween(doj, asOf){
   const years = (end.getTime() - new Date(doj).getTime()) / (365.25*24*3600*1000);
   return Math.max(0, Math.round(years*100)/100);
 }
-function computeNoticePay(grossSalary, workingDays, presentDays){
+// Each month the notice days fall in is paid at that month's own daily rate (Gross ÷ that month's Working Days).
+function computeNoticePay(grossSalary, lwd, endDate){
   const gross = Number(grossSalary||0);
-  return workingDays>0 ? Math.round((gross/workingDays)*presentDays) : 0;
+  if(!lwd || !endDate || endDate <= lwd) return 0;
+  const s = parseYMD(lwd), e = parseYMD(endDate);
+  const cur = new Date(Date.UTC(s.y, s.m, s.d + 1));
+  const stop = Date.UTC(e.y, e.m, e.d);
+  const perMonth = new Map();
+  for(; cur.getTime() <= stop; cur.setUTCDate(cur.getUTCDate() + 1)){
+    const y = cur.getUTCFullYear(), m = cur.getUTCMonth(), d = cur.getUTCDate();
+    if(isWeekendUTC(y,m,d) || isMandatoryHoliday(m,d)) continue;
+    perMonth.set(y+'-'+m, (perMonth.get(y+'-'+m)||0) + 1);
+  }
+  let total = 0;
+  for(const [key, days] of perMonth){
+    const [y, m] = key.split('-').map(Number);
+    const monthWorking = countEligibleDays(y, m, 1, daysInMonth(y, m));
+    if(monthWorking > 0) total += (gross/monthWorking) * days;
+  }
+  return Math.round(total);
+}
+function recomputeNoticePay(rec){
+  const pay = computeNoticePay(rec.comp.grossSalary, rec.lwd, rec.dues.noticePay.date);
+  rec.dues.noticePay.amount = pay;
+  rec.settlement.earnings.noticePeriodPay = pay;
 }
 function applySalaryAndPfSplit(rec){
   const s = computeSalarySplit(rec.comp.grossSalary, rec.dor, rec.lwd, rec.comp.workingDays, rec.comp.presentDays);
@@ -610,23 +632,23 @@ function applySalaryAndPfSplit(rec){
   rec.settlement.deductions.pfCurrentMonth = pCur.salaryCurrentMonth;
   rec.settlement.deductions.pfPreviousMonth = pPrev.salaryPreviousMonth;
   rec.settlement.earnings.gratuity = computeGratuity(rec.comp.grossSalary, rec.comp.tenureYears);
-  if(rec.dues.noticePay.applicable){
-    const noticePay = computeNoticePay(rec.comp.grossSalary, rec.comp.workingDays, rec.comp.presentDays);
-    rec.dues.noticePay.amount = noticePay;
-    rec.settlement.earnings.noticePeriodPay = noticePay;
-  }
+  if(rec.dues.noticePay.applicable) recomputeNoticePay(rec);
 }
 function updateNoticePayApplicable(i, checked){
   const rec = state.records[i];
   rec.dues.noticePay.applicable = checked;
   if(checked){
-    const noticePay = computeNoticePay(rec.comp.grossSalary, rec.comp.workingDays, rec.comp.presentDays);
-    rec.dues.noticePay.amount = noticePay;
-    rec.settlement.earnings.noticePeriodPay = noticePay;
+    recomputeNoticePay(rec);
   } else {
     rec.dues.noticePay.amount = 0;
     rec.settlement.earnings.noticePeriodPay = 0;
   }
+  render();
+}
+function updateNoticePayDate(i, value){
+  const rec = state.records[i];
+  rec.dues.noticePay.date = value;
+  if(rec.dues.noticePay.applicable) recomputeNoticePay(rec);
   render();
 }
 function updateNoticePayAmount(i, value){
@@ -1225,8 +1247,8 @@ function renderDetail(){
             <label class="switch"><input type="checkbox" ${rec.dues.noticePay.applicable?'checked':''} onchange="updateNoticePayApplicable(${activeIndex},this.checked)"><span class="slider"></span></label>
           </div>
           <div class="field-grid">
-            ${field(`<label>Date recorded in No Dues Panel</label>`, `<input type="date" value="${rec.dues.noticePay.date}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="state.records[${activeIndex}].dues.noticePay.date=this.value">`)}
-            ${field(`<label>Notice Pay amount <span class="fr">Gross ÷ Working Days × Present Days, PF excluded</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.dues.noticePay.amount}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="updateNoticePayAmount(${activeIndex},this.value)">`)}
+            ${field(`<label>Notice paid until (date recorded in No Dues Panel)</label>`, `<input type="date" value="${rec.dues.noticePay.date}" ${!rec.dues.noticePay.applicable?'disabled':''} onchange="updateNoticePayDate(${activeIndex},this.value)">`)}
+            ${field(`<label>Notice Pay amount <span class="fr">Gross ÷ month's Working Days × days after LWD up to the date above, PF excluded</span></label>`, `<input type="text" inputmode="decimal" data-num value="${rec.dues.noticePay.amount}" ${!rec.dues.noticePay.applicable?'disabled':''} oninput="updateNoticePayAmount(${activeIndex},this.value)">`)}
           </div>
         </div>
       </div>
